@@ -67,7 +67,7 @@ This is a results message, exactly as it arrives (Hilton Grand Vacations, replay
 
 ## What it costs
 
-Nothing. A private copy on GitHub gets 2,000 free minutes of running time a month. Our own copy with 23 names takes about 40 seconds a run, which GitHub counts as one minute, so two runs every weekday use about 44 of them.
+Nothing. A private copy on GitHub gets 2,000 free minutes of running time a month. Our own copy with 23 names takes about 40 seconds a run, which GitHub counts as one minute, and about two minutes once a week when it refreshes the results and dividend dates, so two runs every weekday use about 50 of them.
 
 ## Set it up in the browser, every click (about ten minutes)
 
