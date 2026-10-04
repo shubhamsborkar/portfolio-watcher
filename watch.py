@@ -316,6 +316,11 @@ def release_url(cik, accession):
                 best = folder + cells[2].split()[0]
             if cells[3].upper() in ("EX-99.1", "EX-99"):
                 break
+    if not best:  # no press release attached: link the 8-K's own page, never the folder of files
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", index, re.S):
+            cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)]
+            if len(cells) >= 4 and cells[3].upper().startswith("8-K") and cells[2].lower().endswith((".htm", ".html")):
+                return None, folder + cells[2].split()[0]
     return best, folder
 
 
@@ -444,14 +449,15 @@ def check_results(rows, state, replay=False):
 def check_prices(rows, state):
     out = []
     for row in rows:
-        series = yahoo(row.get("yahoo") or row["ticker"], "5d")
-        if len(series) < 2:
+        series = yahoo(row.get("yahoo") or row["ticker"], "3mo")
+        if len(series) < 23:
             continue
-        move, day = pct(series[-1][1], series[-2][1]), series[-1][0]
+        move, day, last = pct(series[-1][1], series[-2][1]), series[-1][0], series[-1][1]
         if abs(move) >= STOCK_DAY_MOVE and first_today(state, f"price|{row['ticker']}|{day}"):
-            word = "rose" if move > 0 else "fell"
-            out.append(f"<b>{esc(name_of(row['ticker']))}</b> {word} {abs(move):.1f}% on {nice_date(day)}, "
-                       f"to {series[-1][1]:,.2f}.")
+            month = pct(last, series[-22][1])
+            out.append(f"<b>{esc(name_of(row['ticker']))}</b>\n"
+                       f"{'Up' if move > 0 else 'Down'} {abs(move):.1f}% on {nice_date(day)}, to ${last:,.2f}.\n"
+                       f"{'Up' if month >= 0 else 'Down'} {abs(month):.1f}% over the past month.")
     return out
 
 
@@ -463,31 +469,32 @@ def load_commodities():
 
 
 def breakout(series, digits=2, unit=""):
-    """A new high or low over the last RANGE_DAYS readings, with the range before it."""
+    """A new high or low over the last RANGE_DAYS readings: (kind, fact line, range line)."""
     if len(series) <= RANGE_DAYS:
         return None
     last_day, last = series[-1]
     before = [v for _, v in series[-RANGE_DAYS - 1:-1]]
     lo, hi, start = min(before), max(before), series[-RANGE_DAYS - 1][0]
     fmt = lambda v: f"{v:,.{digits}f}{unit}"
-    span = f"it had ranged from {fmt(lo)} to {fmt(hi)} since {nice_date(start)}"
+    span = f"Range since {nice_date(start)}: {fmt(lo)} to {fmt(hi)}."
     if last > hi:
-        return "high", f"closed at its highest in three months, {fmt(last)}, on {nice_date(last_day)}; {span}."
+        return "high", f"{fmt(last)} on {nice_date(last_day)}, its highest in three months.", span
     if last < lo:
-        return "low", f"closed at its lowest in three months, {fmt(last)}, on {nice_date(last_day)}; {span}."
+        return "low", f"{fmt(last)} on {nice_date(last_day)}, its lowest in three months.", span
     return None
 
 
-def who_line(who, prefix="Your names with ", short=False):
+def who_line(who, short=False):
+    """Two plain lines: the names with costs tied to the item, and the names with revenue."""
     show = (lambda t: t) if short else name_of
     costs = [show(t) for t, side in who if side == "cost"]
     revenue = [show(t) for t, side in who if side == "revenue"]
-    parts = []
+    lines = []
     if costs:
-        parts.append("costs tied to it: " + ", ".join(costs))
+        lines.append("Costs tied to it: " + ", ".join(costs))
     if revenue:
-        parts.append("revenue tied to it: " + ", ".join(revenue))
-    return prefix + "; ".join(parts) + "."
+        lines.append("Revenue tied to it: " + ", ".join(revenue))
+    return "\n".join(lines)
 
 
 def exposure_map(rows):
@@ -512,15 +519,14 @@ def check_exposures(rows, state):
             continue  # only daily prices can break out; monthly series are too slow for this
         is_fx = c.get("group") == "Currency"
         hit = breakout(series, 4 if is_fx else 2, "")
-        unit = "" if is_fx else f" {c.get('unit', '')}"
+        unit = "" if is_fx else f" ({c.get('unit', '')})"
         if hit and quiet_since(state, f"range|{cid}"):
-            kind, words = hit
-            out.append(f"<b>{esc(c['label'])}</b>{esc(unit) and ' (' + esc(unit.strip()) + ')'} {esc(words)}\n{esc(who_line(who))}")
+            out.append(f"<b>{esc(c['label'])}</b>{esc(unit)}\n{esc(hit[1])}\n{esc(hit[2])}\n{esc(who_line(who, short=True))}")
         elif not is_fx:
             top = max(v for _, v in series)
             if pct(series[-1][1], top) >= -NEAR_FIVE_YEAR_HIGH and quiet_since(state, f"peak|{cid}"):
-                out.append(f"<b>{esc(c['label'])}</b> is within {NEAR_FIVE_YEAR_HIGH:g}% of its highest price in five years, "
-                           f"at {series[-1][1]:,.2f}{esc(unit)}.\n{esc(who_line(who))}")
+                out.append(f"<b>{esc(c['label'])}</b>{esc(unit)}\n{series[-1][1]:,.2f}, within "
+                           f"{NEAR_FIVE_YEAR_HIGH:g}% of its highest price in five years.\n{esc(who_line(who, short=True))}")
     return out
 
 
@@ -534,11 +540,11 @@ def check_macro(state):
             continue
         if sid == "VIXCLS":
             if s[-1][1] > 25 >= s[-2][1] and quiet_since(state, "macro|VIXCLS"):
-                out.append(f"<b>VIX</b> crossed above 25, to {s[-1][1]:.2f}, on {nice_date(s[-1][0])}.\n{esc(why)}")
+                out.append(f"<b>VIX</b>\n{s[-1][1]:.2f} on {nice_date(s[-1][0])}, above 25.\n<i>{esc(why)}</i>")
             continue
         hit = breakout(s, 2, unit)
         if hit and quiet_since(state, f"macro|{sid}"):
-            out.append(f"<b>{esc(label)}</b> {esc(hit[1])}\n{esc(why)}")
+            out.append(f"<b>{esc(label)}</b>\n{esc(hit[1])}\n{esc(hit[2])}\n<i>{esc(why)}</i>")
     return out
 
 
@@ -559,42 +565,93 @@ def calendar_today():
     return out
 
 
+TRUSTED_SOURCES = ["Reuters", "Bloomberg", "Associated Press", "AP News", "CNBC", "Financial Times", "FT.com",
+                   "The Wall Street Journal", "WSJ", "Barron's", "MarketWatch", "Nikkei", "The Economist",
+                   "Fortune", "Forbes", "Business Insider", "Axios", "Yahoo Finance", "Investopedia",
+                   "Seeking Alpha", "The Motley Fool", "Investor's Business Daily", "Morningstar", "BBC", "CNN",
+                   "The New York Times", "The Guardian", "Al Jazeera", "Economic Times", "Mint", "Moneycontrol"]
+THEMES = os.path.join(HERE, "themes.txt")
+
+
+def google_news(query):
+    """[(headline, source, link)] for the last day, newest search first."""
+    q = urllib.parse.quote(f"{query} when:1d")
+    try:
+        feed = fetch(f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en")
+    except Exception:
+        return []
+    out = []
+    for title, url in re.findall(r"<item>.*?<title>(.*?)</title>.*?<link>(.*?)</link>", feed, re.S):
+        headline, _, source = html.unescape(title).rpartition(" - ")
+        if headline and not any(n.lower() in source.lower() for n in NOISY_SOURCES):
+            out.append((headline, source, url))
+    return out
+
+
+def trusted_first(items):
+    return sorted(items, key=lambda i: not any(t.lower() in i[1].lower() for t in TRUSTED_SOURCES))
+
+
+def yahoo_news(ticker):
+    """[(headline, source, link, published)] from Yahoo Finance's news feed for one ticker."""
+    from email.utils import parsedate_to_datetime
+    try:
+        feed = fetch(f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={urllib.parse.quote(ticker)}&region=US&lang=en-US")
+    except Exception:
+        return []
+    out = []
+    for item in re.findall(r"<item>(.*?)</item>", feed, re.S):
+        title = re.search(r"<title>(.*?)</title>", item, re.S)
+        url = re.search(r"<link>(.*?)</link>", item, re.S)
+        when = re.search(r"<pubDate>(.*?)</pubDate>", item, re.S)
+        if title and url and when:
+            try:
+                out.append((html.unescape(title.group(1)).strip(), "Yahoo Finance", url.group(1).strip(),
+                            parsedate_to_datetime(when.group(1).strip())))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
 def headlines(rows, state):
+    """The newest headline that names the company, for your first holdings, from Yahoo Finance's
+    news feed for the ticker. Your keywords put matching stories first. Nothing recent, no line."""
     out, total = [], 0
+    now = datetime.now(timezone.utc)
+    recent = now - timedelta(days=3 if now.weekday() == 0 else 2)  # a Monday looks back over the weekend
     for row in rows:
         if total >= HEADLINES_IN_TOTAL:
             break
-        picked = []
-        words = row["keywords"] or [name_of(row["ticker"]).rsplit(" (", 1)[0]]  # the company's name when you set no words
-        for k in words:
-            q = urllib.parse.quote(f"\"{k}\" when:1d")
-            try:
-                feed = fetch(f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en")
-            except Exception:
-                continue
-            for title, url in re.findall(r"<item>.*?<title>(.*?)</title>.*?<link>(.*?)</link>", feed, re.S):
-                title = html.unescape(title)
-                headline, _, source = title.rpartition(" - ")
-                plain = k.lower().replace("'", "’")
-                if (title in state["headlines"] or any(n.lower() in source.lower() for n in NOISY_SOURCES)
-                        or not (k.lower() in headline.lower() or plain in headline.lower())
-                        or any(headline[:40] == p[0][:40] for p in picked)):
-                    continue
-                picked.append((headline or title, source, url))
-                if len(picked) >= min(HEADLINES_PER_HOLDING, HEADLINES_IN_TOTAL - total):
-                    break
-            time.sleep(1)
-            if len(picked) >= min(HEADLINES_PER_HOLDING, HEADLINES_IN_TOTAL - total):
-                break
-        if total >= HEADLINES_IN_TOTAL:
-            break
-        if picked:
-            lines = [f"<b>{esc(name_of(row['ticker']))}</b>"]
-            for headline, source, url in picked:
-                lines.append(f"• {link(url, headline)} <i>({esc(source)})</i>")
+        name = name_of(row["ticker"]).rsplit(" (", 1)[0]
+        first_word = next((w for w in re.split(r"[\s,]+", name) if len(w) >= 3), name)
+        named = lambda h: (first_word.lower() in h.lower() or re.search(rf"\b{re.escape(row['ticker'])}\b", h))
+        fresh = lambda h, src: f"{h} - {src}" not in state["headlines"]
+        candidates = [(h, src, u) for h, src, u, when in yahoo_news(row.get("yahoo") or row["ticker"])
+                      if when >= recent and named(h) and fresh(h, src)]
+        # no search fallback: a wrong company's headline (PTC India for PTC) is worse than none
+        keys = [k.lower() for k in row["keywords"]]
+        candidates.sort(key=lambda c: not any(k in c[0].lower() for k in keys))
+        if candidates:
+            headline, source, url = candidates[0]
+            out.append(f"<b>{esc(name_of(row['ticker']))}</b>\n{link(url, headline)} <i>({esc(source)})</i>")
+            state["headlines"].append(f"{headline} - {source}")
+            total += 1
+    return out
+
+
+def theme_headlines(state):
+    """One headline from a trusted outlet for each theme in themes.txt (a strait, a war, a tariff)."""
+    if not os.path.exists(THEMES):
+        return []
+    out = []
+    for theme in [t.strip() for t in open(THEMES) if t.strip() and not t.startswith("#")][:5]:
+        for headline, source, url in google_news(f'"{theme}"'):
+            if (any(t.lower() in source.lower() for t in TRUSTED_SOURCES)
+                    and f"{headline} - {source}" not in state["headlines"]):
+                out.append(f"<b>{esc(theme)}</b>\n{link(url, headline)} <i>({esc(source)})</i>")
                 state["headlines"].append(f"{headline} - {source}")
-            out.append("\n".join(lines))
-            total += len(picked)
+                break
+        time.sleep(1)
     return out
 
 
@@ -674,11 +731,10 @@ def portfolio_map(rows):
     held = exposure_map(rows)
     for cid, who in sorted(held.items(), key=lambda kv: -len(kv[1])):
         label = book.get(cid, {}).get("label", cid)
-        line = who_line(who, prefix="", short=True)
-        lines.append(f"<b>{esc(label)}</b>\n{esc(line[:1].upper() + line[1:])}")
+        lines.append(f"<b>{esc(label)}</b>\n{esc(who_line(who, short=True))}\n")
     alone = [r["ticker"] for r in rows if not r["exposures"]]
     if alone:
-        lines += ["", f"No commodity or currency set yet: {esc(', '.join(alone))}."]
+        lines += [f"No commodity or currency set yet: {esc(', '.join(alone))}."]
     lines += ["", "Every holding also shares the same rates, credit spreads and dollar, which the "
                   "watcher checks for all of them."]
     return "\n".join(lines)
@@ -724,6 +780,7 @@ def main(argv):
         if cal:
             sections.append((f"🗓 Today's US releases", cal))
         sections.append(("📰 Top headlines", headlines(rows, state)))
+        sections.append(("🌍 Themes you follow", theme_headlines(state)))
 
     body = "\n\n".join(f"<b>{title}</b>\n" + "\n\n".join(blocks) for title, blocks in sections if blocks)
     if body:

@@ -14,7 +14,7 @@ After that, each check sends one message, in this order of priority, and only th
 2. **Big moves in your holdings.** A holding that moved 5% or more in a day.
 3. **What your portfolio depends on.** A commodity or currency your holdings are tied to breaking out of its range: a new three-month high or low, with the range it had been in, and the names in your portfolio tied to it. A swing of a few percent inside a range is noise, so it never fires. Crude can go from 90 to 110 and back inside a month without telling you anything about a holding that buys fuel.
 4. **Rates and markets.** The 10-year and 2-year Treasury yields, high-yield credit spreads and the dollar reaching a three-month high or low, and the VIX crossing above 25, each with one line on why it matters.
-5. **In the morning only:** the day's high-impact US releases (CPI, jobs, the Fed) and the top headline for your first five holdings.
+5. **In the morning only:** the day's high-impact US releases (CPI, jobs, the Fed), the newest headline that names each of your first five holdings, and one headline from a trusted outlet for each theme you follow in `themes.txt` (a strait, a war, a tariff).
 
 Once something fires, it stays quiet for five days, so a trend does not message you every day.
 
@@ -60,7 +60,7 @@ Each row is one holding. Only `ticker` is needed; every other column is optional
 | `look_for` | the words that sit right before the number you care about in the company's results release | `Gross Bookings grew ... to` |
 | `test` | your line for that number, starting with at least, at most, above or below | `at least 45` |
 | `exposures` | what the company buys (cost) or sells (revenue), separated by `;` | `wti:cost` |
-| `keywords` | words for the morning headline, separated by `;`. Leave it empty and the company's name is used | `Uber; robotaxi` |
+| `keywords` | words that put matching stories first in the morning headline, separated by `;` | `robotaxi` |
 | `yahoo` | only for a listing outside the US: Yahoo's symbol | `RELIANCE.NS` |
 | `note` | anything you want repeated back to you in the results message | `Fuel is the drivers' cost` |
 
@@ -70,7 +70,7 @@ A few things that make it work well:
 - **The exposure names** come from `data/commodities.json`. The common ones: `wti` and `brent` (crude), `natgas_us`, `gasoline`, `copper`, `aluminium`, `gold`, `silver`, `uranium`, `wheat`, `corn`, `coffee`, `cocoa`, `cotton`, `eurusd`, `gbpusd`, `usdjpy`, `usdcny`, `usdinr`.
 - **Not sure what a company is exposed to?** Its annual report says. On your own computer, `python watch.py --exposures UBER` lists every commodity and currency word in Uber's latest annual report with the sentence around it. The program only counts words; you decide which ones are real. In Uber's report the word "sugar" turns up twice, and both times it is the chairman, Ronald Sugar. Or give the annual report to Claude or ChatGPT once and ask which commodities and currencies are a real cost or revenue for the business.
 - **Put your main holdings at the top.** The morning headlines come from the top of the list down.
-- **Pick specific words for headlines.** A company name alone brings in everything with that name in it, so "Walmart" will also bring you a golf tournament. A product, a project or a place usually works better.
+- **Headlines come from Yahoo Finance's news for each ticker** and must name the company, so a story about a different company with a similar name never gets in. Themes that are not one company, a strait, a war, a tariff, go in `themes.txt`, one per line, and only trusted outlets count for those.
 
 ## Connect your broker instead of keeping a list
 
