@@ -1,37 +1,43 @@
 """
 Portfolio watcher.
 
-Twice a day on weekdays (before the market opens and after it closes) it checks every
-holding on your watchlist and sends you ONE short message, and only when something matters:
+Twice a day on weekdays (before the market opens and after it closes) it checks every stock in
+stocks.txt, or every holding at your broker, and sends you ONE short Telegram message, and only
+when something matters:
 
-  1. Results     a new results filing at the SEC (form 8-K, item 2.02). It opens the press
-                 release, finds the number you wrote down, and checks it against your line.
-  2. Big moves   a holding that moved 5% or more in a day.
-  3. What your   a commodity, currency or rate your holdings depend on breaking out of its
-     portfolio   range: a new three-month high or low, with the range for context and the
-     depends on  names in your portfolio that buy it, sell it or borrow against it.
-  4. Morning     the day's high-impact US releases (CPI, jobs, the Fed) and the top headline
-                 for your first few holdings.
+  1. Results      a new results filing at the SEC (form 8-K, item 2.02): the press release's own
+                  sentences on revenue, earnings per share and the outlook, with the link.
+  2. New filings  insider buys, insider sales outside a pre-set plan, material 8-Ks, quarterly and
+                  annual reports, activist stakes (13D).
+  3. Big moves    a holding that moved 5% or more in a day.
+  4. What your    a commodity, currency or rate your holdings depend on reaching a three-month
+     portfolio    high or low, with the range and the names tied to it.
+     depends on
+  5. Morning      the day's high-impact US releases, the top headlines, your themes.
+  Monday          the portfolio as a whole: largest positions, the week's move, what it depends
+                  on, who reports results in the next five trading days.
 
 A quiet day sends nothing. The first run sends a map of how your holdings connect.
 
-No AI runs in the check: it is plain code reading free public data. If a press release
-cannot be read by code and you have added an OpenRouter key, a cheap model is asked for
-that one sentence, and the program keeps it only if the sentence is really in the release.
+No AI runs in the check: it is plain code reading free public data. If you write your own
+results line and the code cannot find it, and you have added an OpenRouter key, a cheap model
+is asked for that one sentence, and the program keeps it only if it is really in the release.
 
 Settings (GitHub repository secrets, or environment variables on your computer):
   TELEGRAM_TOKEN      the token @BotFather gave you
   TELEGRAM_CHAT_ID    your chat ID (run: python watch.py --chat-id)
   SEC_EMAIL           your email; the SEC asks every program to say who is calling
-  OPENROUTER_API_KEY  optional, only for releases code cannot read
+  BROKER              optional: read your holdings from your broker (see the README)
+  OPENROUTER_API_KEY  optional, only for your own results line
   OPENROUTER_MODEL    optional, default openai/gpt-6-luna
 
 Run it by hand:
   python watch.py                    the check: message only what is new
-  python watch.py --dry-run          print the message instead of sending it
+  python watch.py --dry-run          print the messages instead of sending them
   python watch.py --morning          include the calendar and headlines now
+  python watch.py --week             send the Monday portfolio check now
   python watch.py --map              send the map of how your holdings connect
-  python watch.py --replay ACN       re-read ACN's latest results and message them again
+  python watch.py --replay ACN       send ACN's latest results again, marked as a replay
   python watch.py --exposures UBER   list the commodity and currency words in UBER's annual report
   python watch.py --chat-id          print the chat ID of whoever last messaged your bot
 
@@ -48,6 +54,7 @@ import subprocess
 import sys
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
@@ -234,7 +241,7 @@ def industry_guess(ticker):
     if not entry:
         return []
     try:
-        sic = int(json.loads(sec_get(f"https://data.sec.gov/submissions/CIK{entry[0]:010d}.json")).get("sic") or 0)
+        sic = int(company_file(entry[0]).get("sic") or 0)
     except (RuntimeError, ValueError):
         return []
     for (lo, hi), exposures in INDUSTRY_EXPOSURES:
@@ -252,7 +259,7 @@ def fill_exposures(rows):
 
 
 def broker_holdings():
-    """[(ticker, yahoo symbol, market value)] read from your broker, when BROKER is set; [] when it is not.
+    """[(ticker, yahoo symbol, market value, shares)] read from your broker, when BROKER is set; [] when it is not.
     The broker files come from GreekSoup's broker layer; they only read, they never trade."""
     bid = (os.environ.get("BROKER") or "").strip().lower()
     if not bid:
@@ -268,7 +275,7 @@ def broker_holdings():
         ysym = (row.get("ysym") or row.get("code") or "").strip()
         ticker = ysym.split(".")[0].upper() if ysym.endswith((".NS", ".BO", ".L", ".TO")) else ysym.upper()
         if ticker and (row.get("qty") or 0):
-            out.append((ticker, ysym, row.get("value") or 0))
+            out.append((ticker, ysym, row.get("value") or 0, row.get("qty") or 0))
     return out
 
 
@@ -281,9 +288,9 @@ def portfolio(rows):
         return rows, ""
     by_ticker = {r["ticker"]: r for r in rows}
     merged = []
-    for ticker, ysym, value in held:
+    for ticker, ysym, value, qty in held:
         row = by_ticker.pop(ticker, {"ticker": ticker, "exposures": [], "keywords": []})
-        row["value"] = value
+        row["value"], row["shares"] = value, str(qty)  # the broker's numbers replace stocks.txt
         if ysym and ysym.upper() != ticker:
             row["yahoo"] = ysym
         row["held"] = True
@@ -309,7 +316,7 @@ def load_state():
 
 def save_state(s):
     s = {k: v for k, v in s.items() if k != "today"}
-    s["filings"] = s["filings"][-500:]
+    s["filings"] = s["filings"][-3000:]
     s["headlines"] = s["headlines"][-1000:]
     with open(STATE, "w") as fh:
         json.dump(s, fh, indent=0)
@@ -525,11 +532,13 @@ def results_message(row, filing, url, text, replay):
     found = [(label, q) for label, q in highlights(text) if q != shown]  # never quote the same line twice
     if found:
         lines += ["<b>From the release</b>"] + [f"• <b>{label}:</b> <i>\"{esc(sent)}\"</i>" for label, sent in found]
+    elif not text:
+        lines.append("No press release is attached to this filing; the link opens the filing itself.")
     elif not look_for:
         lines.append("The release is laid out as tables, so open it for the figures.")
     if (row.get("note") or "").strip():
         lines += ["", f"Your note: {esc(row['note'].strip())}"]
-    lines += ["", link(url, "Read the release")]
+    lines += ["", link(url, "Read the release" if text else "Read the filing")]
     return "\n".join(lines)
 
 
@@ -572,11 +581,16 @@ ITEMS_8K = {  # the 8-K items a holder wants to hear about, in plain words
 _SUBMISSIONS = {}
 
 
-def submissions(cik):
-    """The company's recent filings at the SEC, fetched once per run."""
+def company_file(cik):
+    """Everything the SEC lists for one company (name, industry code, recent filings), fetched once per run."""
     if cik not in _SUBMISSIONS:
-        _SUBMISSIONS[cik] = json.loads(sec_get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json"))["filings"]["recent"]
+        _SUBMISSIONS[cik] = json.loads(sec_get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json"))
     return _SUBMISSIONS[cik]
+
+
+def submissions(cik):
+    """The company's recent filings at the SEC."""
+    return company_file(cik)["filings"]["recent"]
 
 
 def doc_url(cik, accession, document):
@@ -604,7 +618,8 @@ def insider_trade(cik, accession, document):
     if int(field("issuerCik", x) or 0) != cik:
         return None
     who = field("rptOwnerName", x)
-    if " " in who:  # the SEC writes "Sweet Julie"; people say "Julie Sweet"
+    entity = re.search(r"(?i)\b(inc|corp|llc|l\.?p|ltd|trust|fund|capital|partners|holdings|group|management|advisors|bank|plc|co)\b\.?", who)
+    if " " in who and not entity:  # the SEC writes a person as "Sweet Julie"; people say "Julie Sweet"
         last, first = who.split(" ", 1)
         who = f"{first} {last}"
     if who.isupper():
@@ -628,7 +643,9 @@ def insider_trade(cik, accession, document):
         return None
     traded = (f"on {nice_date(min(days))}" if len(set(days)) == 1 else
               f"between {nice_date(min(days))} and {nice_date(max(days))}") if days else ""
-    return who, role, bought, sold, field("aff10b5One", x) in ("1", "true"), traded
+    flag = field("aff10b5One", x)  # forms before April 2023 have no such box
+    plan = True if flag in ("1", "true") else False if flag in ("0", "false") else None
+    return who, role, bought, sold, plan, traded
 
 
 def subject_is(cik, accession, holding_cik):
@@ -671,8 +688,10 @@ def check_filings(rows, state):
                     dated = f"{traded}, filed {when}" if traded else f"filed {when}"
                     if bought:
                         line = f"{esc(person)} <b>bought</b> {money(bought)} of stock on the open market {dated}. {link(url, 'Form 4')}"
-                    elif not plan:
+                    elif plan is False:
                         line = f"{esc(person)} sold {money(sold)} of stock {dated}, not under a pre-set plan. {link(url, 'Form 4')}"
+                    elif plan is None:
+                        line = f"{esc(person)} sold {money(sold)} of stock {dated}. {link(url, 'Form 4')}"
                     else:  # routine: added up in the Monday portfolio check
                         state.setdefault("plan_sales", {}).setdefault(row["ticker"], 0)
                         state["plan_sales"][row["ticker"]] += sold
@@ -701,8 +720,9 @@ def check_prices(rows, state):
         move, day, last = pct(series[-1][1], series[-2][1]), series[-1][0], series[-1][1]
         if abs(move) >= STOCK_DAY_MOVE and first_today(state, f"price|{row['ticker']}|{day}"):
             month = pct(last, series[-22][1])
+            sign = "" if "." in (row.get("yahoo") or "") else "$"  # RELIANCE.NS is priced in rupees
             out.append(f"<b>{esc(name_of(row['ticker']))}</b>\n"
-                       f"{'Up' if move > 0 else 'Down'} {abs(move):.1f}% on {nice_date(day)}, to ${last:,.2f}.\n"
+                       f"{'Up' if move > 0 else 'Down'} {abs(move):.1f}% on {nice_date(day)}, to {sign}{last:,.2f}.\n"
                        f"{'Up' if month >= 0 else 'Down'} {abs(month):.1f}% over the past month.")
     return out
 
@@ -1007,7 +1027,7 @@ def exposure_words(ticker):
     if not entry:
         sys.exit(f"{ticker} has no SEC filings.")
     cik = entry[0]
-    recent = json.loads(sec_get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json"))["filings"]["recent"]
+    recent = submissions(cik)
     i = next((i for i, f in enumerate(recent["form"]) if f in ("10-K", "20-F", "40-F")), None)
     if i is None:
         sys.exit(f"No annual report found for {ticker}.")
@@ -1043,7 +1063,16 @@ def telegram(text, dry_run):
                            "disable_web_page_preview": True}).encode()
         req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body,
                                      headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=30).read()
+        try:
+            urllib.request.urlopen(req, timeout=30).read()
+        except urllib.error.HTTPError as e:
+            if e.code == 401:
+                sys.exit("Telegram refused the token. Check the TELEGRAM_TOKEN secret.")
+            # anything else (usually formatting Telegram did not accept): send it as plain text
+            plain = re.sub(r"<[^>]+>", "", part).replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            body = json.dumps({"chat_id": chat, "text": plain, "disable_web_page_preview": True}).encode()
+            urllib.request.urlopen(urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body,
+                                   headers={"Content-Type": "application/json"}), timeout=30).read()
 
 
 def print_chat_id():
@@ -1084,6 +1113,9 @@ def main(argv):
     if "--exposures" in argv:
         return exposure_words(argv[argv.index("--exposures") + 1])
 
+    if not dry_run and not all(os.environ.get(k, "").strip() for k in ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "SEC_EMAIL")):
+        print("Not set up yet: add the TELEGRAM_TOKEN, TELEGRAM_CHAT_ID and SEC_EMAIL secrets (README, step 4). Nothing was checked.")
+        return
     first_run = not os.path.exists(STATE)
     rows, source = portfolio(read_watchlist())
     rows = fill_exposures(rows)
