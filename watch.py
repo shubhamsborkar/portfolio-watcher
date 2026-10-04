@@ -52,6 +52,7 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+STOCKS = os.environ.get("STOCKS") or os.path.join(HERE, "stocks.txt")
 WATCHLIST = os.environ.get("WATCHLIST") or os.path.join(HERE, "watchlist.csv")
 STATE = os.environ.get("STATE") or os.path.join(HERE, "state.json")
 COMMODITIES = os.path.join(HERE, "data", "commodities.json")
@@ -181,14 +182,72 @@ def fred(series):
 # ----------------------------------------------------------------------------- watchlist, broker and state
 
 def read_watchlist():
-    rows = []
+    """Your names. stocks.txt is the simple list: one per line, the ticker and, if you hold it, the
+    number of shares ("UBER 120"; a ticker alone is a name you watch). watchlist.csv is optional and
+    adds columns for any name (your results line, exposures, headline words)."""
+    extra = {}
     if os.path.exists(WATCHLIST):
         with open(WATCHLIST, newline="") as fh:
-            rows = [r for r in csv.DictReader(fh) if (r.get("ticker") or "").strip()]
+            for r in csv.DictReader(fh):
+                if (r.get("ticker") or "").strip():
+                    extra[r["ticker"].strip().upper()] = r
+    rows = []
+    if os.path.exists(STOCKS):
+        for line in open(STOCKS):
+            parts = line.split("#")[0].replace(",", " ").split()
+            if not parts:
+                continue
+            ticker = parts[0].upper()
+            row = dict(extra.pop(ticker, {"ticker": ticker}))
+            if len(parts) > 1:
+                row["shares"] = parts[1]
+            rows.append(row)
+    rows += list(extra.values())  # names only in watchlist.csv
     for r in rows:
         r["ticker"] = r["ticker"].strip().upper()
         r["exposures"] = [e.strip() for e in (r.get("exposures") or "").split(";") if ":" in e]
         r["keywords"] = [k.strip() for k in (r.get("keywords") or "").split(";") if k.strip()]
+    return rows
+
+
+# A starting guess from the company's industry code at the SEC, used only when you set no exposures
+# for a name. Codes are broad (a ride-hailing app is "business services"), so only industries where
+# the link is plain are here; add your own in watchlist.csv and yours always win.
+INDUSTRY_EXPOSURES = [
+    ((100, 199), ["corn:revenue", "wheat:revenue", "soybeans:revenue"]),
+    ((1000, 1039), ["copper:revenue"]), ((1040, 1049), ["gold:revenue", "silver:revenue"]),
+    ((1300, 1319), ["wti:revenue", "natgas_us:revenue"]), ((1380, 1389), ["wti:revenue"]),
+    ((2011, 2015), ["corn:cost", "soymeal:cost"]), ((2040, 2049), ["wheat:cost", "corn:cost"]),
+    ((2060, 2065), ["sugar:cost"]), ((2066, 2066), ["cocoa:cost", "sugar:cost"]),
+    ((2080, 2089), ["sugar:cost", "aluminium:cost"]), ((2095, 2095), ["coffee:cost"]),
+    ((2300, 2399), ["cotton:cost"]), ((2800, 2833), ["natgas_us:cost"]), ((2840, 2899), ["natgas_us:cost"]),
+    ((3312, 3317), ["hrc_us:revenue"]), ((3334, 3334), ["aluminium:revenue"]),
+    ((3600, 3673), ["copper:cost"]), ((3675, 3699), ["copper:cost"]),
+    ((3711, 3716), ["hrc_us:cost", "aluminium:cost"]), ((4011, 4013), ["wti:cost"]),
+    ((4200, 4231), ["wti:cost"]), ((4400, 4499), ["wti:cost"]), ((4512, 4522), ["wti:cost"]),
+    ((4911, 4911), ["natgas_us:cost"]), ((4931, 4931), ["natgas_us:cost"]),
+]
+
+
+def industry_guess(ticker):
+    entry = companies().get(ticker)
+    if not entry:
+        return []
+    try:
+        sic = int(json.loads(sec_get(f"https://data.sec.gov/submissions/CIK{entry[0]:010d}.json")).get("sic") or 0)
+    except (RuntimeError, ValueError):
+        return []
+    for (lo, hi), exposures in INDUSTRY_EXPOSURES:
+        if lo <= sic <= hi:
+            return exposures
+    return []
+
+
+def fill_exposures(rows):
+    for r in rows:
+        if not r["exposures"]:
+            r["exposures"] = industry_guess(r["ticker"])
+            r["guessed"] = bool(r["exposures"])
     return rows
 
 
@@ -888,7 +947,7 @@ def portfolio_week(rows, state):
     held = [r for r in rows if r["ticker"] in w]
     lines = [f"🧭 <b>Your portfolio this week, {nice_date(datetime.now(timezone.utc).date().isoformat())}</b>"]
     if not real:
-        lines.append("<i>Weights are equal because your list has no shares column and no broker is connected.</i>")
+        lines.append("<i>Weights are equal because stocks.txt has no share counts and no broker is connected.</i>")
 
     top = sorted(w.items(), key=lambda kv: -kv[1])[:5]
     lines += ["", "<b>Largest positions</b>"] + [f"{esc(name_of(t))}: {v * 100:.1f}%" for t, v in top]
@@ -1006,9 +1065,13 @@ def portfolio_map(rows):
     for cid, who in sorted(held.items(), key=lambda kv: -len(kv[1])):
         label = book.get(cid, {}).get("label", cid)
         lines.append(f"<b>{esc(label)}</b>\n{esc(who_line(who, short=True))}\n")
+    guessed = [r["ticker"] for r in rows if r.get("guessed")]
+    if guessed:
+        lines.append(f"<i>Filled in from each company's industry code at the SEC: {esc(', '.join(guessed))}. "
+                     f"Add your own in watchlist.csv and yours are used instead.</i>\n")
     alone = [r["ticker"] for r in rows if not r["exposures"]]
     if alone:
-        lines += [f"No commodity or currency set yet: {esc(', '.join(alone))}."]
+        lines += [f"No commodity or currency known yet: {esc(', '.join(alone))}."]
     lines += ["", "Every holding also shares the same rates, credit spreads and dollar, which the "
                   "watcher checks for all of them."]
     return "\n".join(lines)
@@ -1023,6 +1086,7 @@ def main(argv):
 
     first_run = not os.path.exists(STATE)
     rows, source = portfolio(read_watchlist())
+    rows = fill_exposures(rows)
     state = load_state()
 
     if "--replay" in argv:

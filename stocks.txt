@@ -1,0 +1,6 @@
+# Your stocks, one per line: the ticker, then the number of shares you hold.
+# A ticker on its own is a name you watch but do not own.
+# Everything after a # is ignored. Save with "Commit changes".
+AAPL 50
+MSFT 20
+NVDA

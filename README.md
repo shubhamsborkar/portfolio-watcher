@@ -49,36 +49,48 @@ Look for `"chat":{"id":` followed by a number. That number is your chat ID.
 | `TELEGRAM_CHAT_ID` | the number from step 3 |
 | `SEC_EMAIL` | your email address. The SEC asks every program to say who is calling, and it is never sent anywhere else |
 
-**5. Put in your holdings.** Open `watchlist.csv`, click the pencil icon, and replace the example rows with your own (how to fill it in is below). Click **Commit changes** to save.
+**5. Put in your stocks.** Open `stocks.txt`, click the pencil icon, and replace the examples with your own, one per line: the ticker, a space, and the number of shares you hold, like `UBER 120`. A ticker on its own is a name you watch but do not own. Click **Commit changes** to save. Whenever you buy or sell, change the line the same way.
 
 **6. Switch it on.** Open the **Actions** tab. If GitHub asks, click to enable workflows. Click **Portfolio watcher**, then **Run workflow**. In a minute or two your bot writes to you. Its first messages are a hello and the map of how your holdings connect. From then on it runs by itself, before the US market opens and after it closes, every weekday.
 
-## Filling in the watchlist
+## Your stocks, and the optional extras
 
-Each row is one holding. Only `ticker` is needed; every other column is optional. Most people fill in `ticker` and `shares` and stop there.
+`stocks.txt` is all most people need:
+
+```
+UBER 120
+SPGI 15
+NXPI
+```
+
+The shares are what the Monday check uses to weight your portfolio. For a listing outside the US, use Yahoo Finance's symbol (`RELIANCE.NS 10`); the results and filings checks cover companies that file with the SEC.
+
+**What your stocks depend on is filled in for you where it is plain.** The program reads each company's industry code at the SEC and ties a copper miner to copper, a utility to natural gas, an apparel maker to cotton, an airline to crude, and so on. The codes are broad: a ride-hailing app is filed as "business services", so its fuel cost is not guessed, and currencies are never guessed. The first message tells you which names it filled in and which are still unknown.
+
+**The extras live in `watchlist.csv`, and every column is optional.** Add a row only for a name you want to say more about; its ticker is enough to match it to `stocks.txt`.
 
 | Column | What to put in | Example |
 |---|---|---|
 | `ticker` | the ticker | `UBER` |
-| `look_for` | optional, for people who write a test before results: the words that sit right before the number you care about in the results release | `Gross Bookings grew ... to` |
-| `test` | optional: your line for that number, starting with at least, at most, above or below | `at least 45` |
-| `exposures` | what the company buys (cost) or sells (revenue), separated by `;` | `wti:cost` |
-| `keywords` | words that put matching stories first in the morning headline, separated by `;` | `robotaxi` |
-| `yahoo` | only for a listing outside the US: Yahoo's symbol | `RELIANCE.NS` |
-| `shares` | how many shares you hold, so the Monday check can weight the portfolio. Leave it empty for a name you watch but do not own | `120` |
+| `exposures` | what the company buys (cost) or sells (revenue), separated by `;`. Yours replace the guess | `wti:cost; eurusd:revenue` |
+| `keywords` | words that put matching stories first in the morning headline | `robotaxi` |
+| `look_for` | for people who write a test before results: the words that sit right before the number you care about in the results release | `Gross Bookings grew ... to` |
+| `test` | your line for that number, starting with at least, at most, above or below | `at least 45` |
 | `note` | anything you want repeated back to you in the results message | `Fuel is the drivers' cost` |
 
-A few things that make it work well:
+A few things that help:
 
-- **If you write a results line, copy `look_for` from the company's last release.** Apple writes "quarterly revenue of", Microsoft writes "Revenue was". Three dots stand for a few words in between. Write the `test` number in the same units the company uses: if it reports in millions, your line is in millions.
 - **The exposure names** come from `data/commodities.json`. The common ones: `wti` and `brent` (crude), `natgas_us`, `gasoline`, `copper`, `aluminium`, `gold`, `silver`, `uranium`, `wheat`, `corn`, `coffee`, `cocoa`, `cotton`, `eurusd`, `gbpusd`, `usdjpy`, `usdcny`, `usdinr`.
 - **Not sure what a company is exposed to?** Its annual report says. On your own computer, `python watch.py --exposures UBER` lists every commodity and currency word in Uber's latest annual report with the sentence around it. The program only counts words; you decide which ones are real. In Uber's report the word "sugar" turns up twice, and both times it is the chairman, Ronald Sugar. Or give the annual report to Claude or ChatGPT once and ask which commodities and currencies are a real cost or revenue for the business.
-- **Put your main holdings at the top.** The morning headlines come from the top of the list down.
-- **Headlines come from Yahoo Finance's news for each ticker** and must name the company, so a story about a different company with a similar name never gets in. Themes that are not one company, a strait, a war, a tariff, go in `themes.txt`, one per line, and only trusted outlets count for those.
+- **If you write a results line, copy `look_for` from the company's last release.** Apple writes "quarterly revenue of", Microsoft writes "Revenue was". Three dots stand for a few words in between. Write the `test` number in the units the company uses: if it reports in millions, your line is in millions.
+- **Put your main holdings at the top of `stocks.txt`.** The morning headlines come from the top of the list down.
+- **Headlines come from Yahoo Finance's news for each ticker** and must name the company. Themes that are not one company, a strait, a war, a tariff, go in `themes.txt`, one per line, and only trusted outlets count for those.
+
+**Want to see a results message now?** In the **Actions** tab, click **Portfolio watcher**, then **Run workflow**, type a ticker in the box (for example `ACN`), and run it. It sends you that company's latest results again, marked as a replay.
 
 ## Connect your broker instead of keeping a list
 
-The list in `watchlist.csv` works with any broker, but you have to update it every time you buy or sell. If your broker offers an API (a door the broker opens so a program can read your account), the watcher can read your holdings from the broker before every check instead, so a new position is watched from the next run without you touching anything.
+The list in `stocks.txt` works with any broker, but you have to update it every time you buy or sell. If your broker offers an API (a door the broker opens so a program can read your account), the watcher can read your holdings from the broker before every check instead, so a new position is watched from the next run without you touching anything.
 
 The watcher only reads. Nothing in it places an order. The broker files come from GreekSoup, the open-source one-person equity research desk.
 
@@ -96,14 +108,14 @@ The watcher only reads. Nothing in it places an order. The broker files come fro
 | [Angel One](https://greeksoup.ai/docs/brokers/angel-one/) | India | `angel_one` | `ANGEL_API_KEY`, `ANGEL_CLIENT_CODE`, `ANGEL_PIN`, `ANGEL_TOTP_SECRET` |
 | [Groww](https://greeksoup.ai/docs/brokers/groww/) | India | `groww` | `GROWW_API_KEY`, and `GROWW_API_SECRET` or `GROWW_TOTP_SECRET` |
 
-With a broker connected, the watcher watches everything the broker holds, plus anything else in `watchlist.csv`, so the list becomes the place for your notes: your line on the results, the exposures and the headline words for each holding, and the names you watch without owning. A holding that is not on the list is still watched for results, price moves and the morning headlines.
+With a broker connected, the watcher watches everything the broker holds, with the shares the broker reports, plus anything else in your lists: the names you watch without owning, and your extras in `watchlist.csv`. A holding that is not on the list is still watched for results, price moves and the morning headlines.
 
 **What to know before you do it:**
 
 - Your broker keys sit in your private copy's secrets, which GitHub encrypts and never shows again, even to you. Most brokers' keys can also trade, so treat them like a password: keep your copy private, and where your broker offers a read-only key, use that.
 - The Indian brokers in the table need your trading PIN and the secret behind your authenticator app, because their rules ask for a fresh login each day and this is how the watcher logs in by itself. If you would rather not store those, keep the list.
 - Brokers that need you to log in by hand every day (Schwab, Robinhood, Saxo, Zerodha, ICICI Direct, Upstox) cannot work on a schedule while you sleep, so for those the list is the way. Brokers with no API for individuals (Fidelity, Vanguard and most app-only brokers) are the same.
-- The broker files are the same ones GreekSoup uses. If yours fails to connect, the run says why in plain words, and the list still works. GreekSoup's [broker will not connect](https://greeksoup.ai/docs/help/broker-will-not-connect/) page covers the usual causes.
+- **Not yet run from GitHub's computers.** The broker files are the same ones GreekSoup uses on readers' own computers, and we read a paper account with them on a Mac, but no broker has been connected to a copy of this watcher running on GitHub. If yours fails to connect, the run says why in plain words, and `stocks.txt` still works. GreekSoup's [broker will not connect](https://greeksoup.ai/docs/help/broker-will-not-connect/) page covers the usual causes.
 
 ## Set it for your market
 
