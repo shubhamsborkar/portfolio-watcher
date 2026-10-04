@@ -1028,8 +1028,13 @@ def main(argv):
     if "--replay" in argv:
         t = argv[argv.index("--replay") + 1].upper()
         picked = [r for r in rows if r["ticker"] == t] or [{"ticker": t, "exposures": [], "keywords": []}]
-        for m in check_results(picked, state, replay=True):
+        found = check_results(picked, state, replay=True)
+        for m in found:
             telegram(m, dry_run)
+            if not dry_run:  # a replay also prints what it sent, so you can read it in the run's log
+                print(re.sub(r"<[^>]+>", "", m).replace("&amp;", "&"))
+        if not found:
+            print(f"No results filing found for {t}.")
         return
     if "--map" in argv:
         return telegram(portfolio_map(rows), dry_run)

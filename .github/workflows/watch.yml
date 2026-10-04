@@ -8,6 +8,11 @@ on:
     - cron: "30 12 * * 1-5"
     - cron: "30 21 * * 1-5"
   workflow_dispatch:       # adds a "Run workflow" button so you can test it by hand
+    inputs:
+      replay:
+        description: "Optional: a ticker whose latest results to send you again, to see what a results message looks like (for example ACN)"
+        required: false
+        default: ""
 
 permissions:
   contents: write          # lets the run save state.json, so you never get the same alert twice
@@ -60,7 +65,9 @@ jobs:
           T212_KEY: ${{ secrets.T212_KEY }}
           T212_SECRET: ${{ secrets.T212_SECRET }}
           T212_DEMO: ${{ secrets.T212_DEMO }}
-        run: python3 watch.py
+          REPLAY: ${{ github.event.inputs.replay }}
+        run: |
+          if [ -n "$REPLAY" ]; then python3 watch.py --replay "$REPLAY"; else python3 watch.py; fi
       - name: Remember what was sent
         run: |
           git config user.name "earnings-watcher"
