@@ -1008,9 +1008,9 @@ def portfolio_week(rows, state):
         book = sum(w[t] * m for t, m in moves) / sum(w[t] for t, _ in moves)
         best, worst = max(moves, key=lambda m: m[1]), min(moves, key=lambda m: m[1])
         what = "The portfolio" if real else "Your names, counted equally,"
+        moved = "was flat" if abs(book) < 0.05 else f"{'rose' if book > 0 else 'fell'} {abs(book):.1f}%"
         lines += ["", "<b>Last five trading days</b>",
-                  f"{what} {'rose' if book >= 0 else 'fell'} {abs(book):.1f}%. "
-                  f"Best: {esc(best[0])} {best[1]:+.1f}%. Worst: {esc(worst[0])} {worst[1]:+.1f}%."]
+                  f"{what} {moved}. Best: {esc(best[0])} {best[1]:+.1f}%. Worst: {esc(worst[0])} {worst[1]:+.1f}%."]
 
     book_map, labels = exposure_map(held), {k: v["label"] for k, v in load_commodities().items()}
     rows_out = []
@@ -1084,6 +1084,8 @@ def telegram(text, dry_run):
     token, chat = os.environ.get("TELEGRAM_TOKEN", "").strip(), os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat:
         sys.exit("TELEGRAM_TOKEN or TELEGRAM_CHAT_ID is not set.")
+    # the run's log also shows what was sent, so you can read it on GitHub without your phone
+    print("\n----- sent -----\n" + html.unescape(re.sub(r"<[^>]+>", "", text)) + "\n----------------")
     blocks = []
     for block in text.split("\n\n"):  # Telegram's limit is 4,096 characters; split between blocks
         while len(block) > 3800:  # one very long block (a company with many filings): split it at a line
