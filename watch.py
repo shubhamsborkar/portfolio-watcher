@@ -13,7 +13,8 @@ when something matters:
   4. What your    a commodity, currency or rate your holdings depend on reaching a three-month
      portfolio    high or low, with the range and the names tied to it.
      depends on
-  5. Morning      the day's high-impact US releases, the top headlines, your themes.
+  5. Morning      the day's high-impact US releases, the top headlines, your themes, riding along
+                  only when one of the sections above has news; a quiet morning stays quiet.
   Monday          the portfolio as a whole: largest positions, the week's move, what it depends
                   on, who reports results in the next five trading days.
 
@@ -1170,8 +1171,8 @@ def main(argv):
                 ("📈 Big moves in your holdings", check_prices(rows, state)),
                 ("🛢 What your portfolio depends on", check_exposures(rows, state)),
                 ("🏦 Rates and markets", check_macro(state))]
-    if morning:
-        cal = calendar_today()
+    if morning and any(blocks for _, blocks in sections):  # a quiet morning stays quiet: the calendar and
+        cal = calendar_today()                               # headlines ride along only when there is news
         if cal:
             sections.append((f"🗓 Today's US releases", cal))
         sections.append(("📰 Top headlines", headlines(rows, state)))
