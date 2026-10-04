@@ -69,7 +69,7 @@ COMMODITIES = os.path.join(HERE, "data", "commodities.json")
 
 STOCK_DAY_MOVE = 5.0          # % a holding moves in a day
 RANGE_DAYS = 63               # a breakout means a new high or low over this many trading days (about three months)
-NEAR_FIVE_YEAR_HIGH = 2.0     # a commodity within this % of its five-year high
+NEAR_FIVE_YEAR_HIGH = 2.0     # a breakout within this % of the five-year high says so on the same line
 QUIET_DAYS = 5                # once an item has fired, it stays quiet this many days
 RESULTS_LOOKBACK_DAYS = 3     # a filing older than this is never messaged
 HEADLINES_PER_HOLDING = 1
@@ -720,11 +720,18 @@ def check_prices(rows, state):
         move, day, last = pct(series[-1][1], series[-2][1]), series[-1][0], series[-1][1]
         if abs(move) >= STOCK_DAY_MOVE and first_today(state, f"price|{row['ticker']}|{day}"):
             month = pct(last, series[-22][1])
-            sign = "" if "." in (row.get("yahoo") or "") else "$"  # RELIANCE.NS is priced in rupees
+            suffix = (row.get("yahoo") or row["ticker"]).upper().rpartition(".")[2] if "." in (row.get("yahoo") or row["ticker"]) else ""
+            sign = "" if suffix in NON_US_SUFFIXES else "$"  # RELIANCE.NS is in rupees; BRK.B is a US share class
             out.append(f"<b>{esc(name_of(row['ticker']))}</b>\n"
                        f"{'Up' if move > 0 else 'Down'} {abs(move):.1f}% on {nice_date(day)}, to {sign}{last:,.2f}.\n"
                        f"{'Up' if month >= 0 else 'Down'} {abs(month):.1f}% over the past month.")
     return out
+
+
+# Yahoo Finance's exchange suffixes outside the US (BRK.B and BF.B are US share classes, not exchanges)
+NON_US_SUFFIXES = {"NS", "BO", "L", "IL", "TO", "V", "CN", "NE", "HK", "AX", "NZ", "DE", "F", "PA", "AS", "BR", "MI",
+                   "MC", "LS", "SW", "ST", "OL", "CO", "HE", "IR", "VI", "WA", "T", "KS", "KQ", "SS", "SZ", "SI",
+                   "JK", "BK", "KL", "TW", "TWO", "SA", "MX", "JO", "TA", "SR", "QA", "AE", "DU"}
 
 
 # ----------------------------------------------------------------------------- 3. what the portfolio depends on
@@ -787,12 +794,10 @@ def check_exposures(rows, state):
         hit = breakout(series, 4 if is_fx else 2, "")
         unit = "" if is_fx else f" ({c.get('unit', '')})"
         if hit and quiet_since(state, f"range|{cid}"):
-            out.append(f"<b>{esc(c['label'])}</b>{esc(unit)}\n{esc(hit[1])}\n{esc(hit[2])}\n{esc(who_line(who, short=True))}")
-        elif not is_fx:
-            top = max(v for _, v in series)
-            if pct(series[-1][1], top) >= -NEAR_FIVE_YEAR_HIGH and quiet_since(state, f"peak|{cid}"):
-                out.append(f"<b>{esc(c['label'])}</b>{esc(unit)}\n{series[-1][1]:,.2f}, within "
-                           f"{NEAR_FIVE_YEAR_HIGH:g}% of its highest price in five years.\n{esc(who_line(who, short=True))}")
+            fact = hit[1]
+            if hit[0] == "high" and not is_fx and pct(series[-1][1], max(v for _, v in series)) >= -NEAR_FIVE_YEAR_HIGH:
+                fact = fact[:-1] + f", and within {NEAR_FIVE_YEAR_HIGH:g}% of its highest price in five years."
+            out.append(f"<b>{esc(c['label'])}</b>{esc(unit)}\n{esc(fact)}\n{esc(hit[2])}\n{esc(who_line(who, short=True))}")
     return out
 
 
@@ -1046,13 +1051,21 @@ def exposure_words(ticker):
 
 def telegram(text, dry_run):
     if dry_run:
-        print("\n----- message -----\n" + re.sub(r"<[^>]+>", "", text) + "\n-------------------")
+        print("\n----- message -----\n" + html.unescape(re.sub(r"<[^>]+>", "", text)) + "\n-------------------")
         return
     token, chat = os.environ.get("TELEGRAM_TOKEN", "").strip(), os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat:
         sys.exit("TELEGRAM_TOKEN or TELEGRAM_CHAT_ID is not set.")
-    parts, current = [], ""
+    blocks = []
     for block in text.split("\n\n"):  # Telegram's limit is 4,096 characters; split between blocks
+        while len(block) > 3800:  # one very long block (a company with many filings): split it at a line
+            cut = block.rfind("\n", 0, 3800)
+            cut = cut if cut > 0 else 3800
+            blocks.append(block[:cut])
+            block = block[cut:].lstrip("\n")
+        blocks.append(block)
+    parts, current = [], ""
+    for block in blocks:
         if current and len(current) + len(block) > 3800:
             parts.append(current)
             current = ""
@@ -1093,7 +1106,9 @@ def portfolio_map(rows):
     held = exposure_map(rows)
     for cid, who in sorted(held.items(), key=lambda kv: -len(kv[1])):
         label = book.get(cid, {}).get("label", cid)
-        lines.append(f"<b>{esc(label)}</b>\n{esc(who_line(who, short=True))}\n")
+        daily = book.get(cid, {}).get("sources", {}).get("yahoo")  # only a daily price can break out
+        note = "" if daily else " <i>(no free daily price, so it is on the map but not watched)</i>"
+        lines.append(f"<b>{esc(label)}</b>{note}\n{esc(who_line(who, short=True))}\n")
     guessed = [r["ticker"] for r in rows if r.get("guessed")]
     if guessed:
         lines.append(f"<i>Filled in from each company's industry code at the SEC: {esc(', '.join(guessed))}. "

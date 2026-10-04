@@ -131,7 +131,7 @@ The results check reads SEC filings, so it covers companies that file in the US.
 
 ## Changing the alerts
 
-The thresholds sit at the top of `watch.py`, each with a line saying what it does: the daily move for a holding (5%), the range a breakout is measured against (about three months), how close to its five-year high a commodity has to be (2%), how long an item stays quiet after it fires (five days), and how many headlines you get. Change a number, commit, and the next run uses it.
+The thresholds sit at the top of `watch.py`, each with a line saying what it does: the daily move for a holding (5%), the range a breakout is measured against (about three months), how close to its five-year high a breakout has to be for the message to say so (2%), how long an item stays quiet after it fires (five days), and how many headlines you get. Change a number, commit, and the next run uses it.
 
 ## Where AI comes in
 
@@ -145,7 +145,7 @@ The watcher only talks; it does not answer. If you want to reply to an alert in 
 
 - The results quotes work on most US releases. A release laid out only as tables gives fewer lines, and a company that leads with its own measure (PTC leads with ARR) may show only the outlook; the link is always there. When the code cannot find your own words, the message says so.
 - Companies listed outside the US do not file with the SEC, so they get the price, exposure and headline checks but no results check.
-- Some commodities have no free daily price. Uranium and a few others come from a monthly series that runs two to three months behind, and the message says so. The ones with only a paid source are not watched.
+- Some commodities have no free daily price (uranium, lithium and a few others). They appear on the map, marked as not watched, because only a daily price can break out of a range.
 - Yahoo Finance's price data is free but unofficial, and it can change without notice.
 - This program sends information. It does not tell you what to buy or sell, and it places no orders.
 
