@@ -169,16 +169,58 @@ def fred(series):
         return []
 
 
-# ----------------------------------------------------------------------------- watchlist and state
+# ----------------------------------------------------------------------------- watchlist, broker and state
 
 def read_watchlist():
-    with open(WATCHLIST, newline="") as fh:
-        rows = [r for r in csv.DictReader(fh) if (r.get("ticker") or "").strip()]
+    rows = []
+    if os.path.exists(WATCHLIST):
+        with open(WATCHLIST, newline="") as fh:
+            rows = [r for r in csv.DictReader(fh) if (r.get("ticker") or "").strip()]
     for r in rows:
         r["ticker"] = r["ticker"].strip().upper()
         r["exposures"] = [e.strip() for e in (r.get("exposures") or "").split(";") if ":" in e]
         r["keywords"] = [k.strip() for k in (r.get("keywords") or "").split(";") if k.strip()]
     return rows
+
+
+def broker_holdings():
+    """[(ticker, yahoo symbol)] read from your broker, when BROKER is set; [] when it is not.
+    The broker files come from GreekSoup's broker layer; they only read, they never trade."""
+    bid = (os.environ.get("BROKER") or "").strip().lower()
+    if not bid:
+        return []
+    import brokers  # needs the requests library; the GitHub workflow installs it
+    module = brokers.load(bid)
+    if not module:
+        sys.exit(f"BROKER is set to \"{bid}\", which the watcher does not know. "
+                 f"The ones it knows: {', '.join(brokers.REGISTRY)}.")
+    client = module.connect(brokers.config(bid))
+    out = []
+    for row in module.equity(client):
+        ysym = (row.get("ysym") or row.get("code") or "").strip()
+        ticker = ysym.split(".")[0].upper() if ysym.endswith((".NS", ".BO", ".L", ".TO")) else ysym.upper()
+        if ticker and (row.get("qty") or 0):
+            out.append((ticker, ysym))
+    return out
+
+
+def portfolio(rows):
+    """The names to watch: everything your broker holds, plus anything else on your list.
+    The list's columns (your line, exposures, headline words) apply to a broker holding
+    with the same ticker."""
+    held = broker_holdings()
+    if not held:
+        return rows, ""
+    by_ticker = {r["ticker"]: r for r in rows}
+    merged = []
+    for ticker, ysym in held:
+        row = by_ticker.pop(ticker, {"ticker": ticker, "exposures": [], "keywords": []})
+        if ysym and ysym.upper() != ticker:
+            row["yahoo"] = ysym
+        row["held"] = True
+        merged.append(row)
+    merged += list(by_ticker.values())  # the rest of your list: names you watch but do not hold
+    return merged, f"{len(held)} from your broker and {len(merged) - len(held)} more from your list"
 
 
 def load_state():
@@ -523,7 +565,8 @@ def headlines(rows, state):
         if total >= HEADLINES_IN_TOTAL:
             break
         picked = []
-        for k in row["keywords"]:
+        words = row["keywords"] or [name_of(row["ticker"]).rsplit(" (", 1)[0]]  # the company's name when you set no words
+        for k in words:
             q = urllib.parse.quote(f"\"{k}\" when:1d")
             try:
                 feed = fetch(f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en")
@@ -649,7 +692,8 @@ def main(argv):
         return exposure_words(argv[argv.index("--exposures") + 1])
 
     first_run = not os.path.exists(STATE)
-    rows, state = read_watchlist(), load_state()
+    rows, source = portfolio(read_watchlist())
+    state = load_state()
 
     if "--replay" in argv:
         t = argv[argv.index("--replay") + 1].upper()
@@ -662,7 +706,7 @@ def main(argv):
 
     if first_run:
         telegram(f"👋 <b>Your portfolio watcher is running.</b>\n\nIt is watching {len(rows)} "
-                 f"name{'s' if len(rows) != 1 else ''}. It checks before the market opens and after it "
+                 f"name{'s' if len(rows) != 1 else ''}" + (f" ({source})" if source else "") + ". It checks before the market opens and after it "
                  f"closes, and it only writes when something matters.", dry_run)
         telegram(portfolio_map(rows), dry_run)
 

@@ -18,12 +18,48 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - name: Install the one library the broker connection needs
+        run: pip install --quiet requests
       - name: Check filings, prices, commodities, macro and news
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SEC_EMAIL: ${{ secrets.SEC_EMAIL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Optional: read your holdings from your broker. BROKER is one of alpaca, angel_one,
+          # dhan, groww, ibkr_flex, longbridge, tastytrade, tradier, trading212; the README says
+          # which secrets each one needs. Leave BROKER unset to use watchlist.csv only.
+          BROKER: ${{ secrets.BROKER }}
+          ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+          ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+          ALPACA_PAPER: ${{ secrets.ALPACA_PAPER }}
+          ANGEL_API_KEY: ${{ secrets.ANGEL_API_KEY }}
+          ANGEL_CLIENT_CODE: ${{ secrets.ANGEL_CLIENT_CODE }}
+          ANGEL_PIN: ${{ secrets.ANGEL_PIN }}
+          ANGEL_TOTP_SECRET: ${{ secrets.ANGEL_TOTP_SECRET }}
+          DHAN_CLIENT_ID: ${{ secrets.DHAN_CLIENT_ID }}
+          DHAN_ACCESS_TOKEN: ${{ secrets.DHAN_ACCESS_TOKEN }}
+          DHAN_PIN: ${{ secrets.DHAN_PIN }}
+          DHAN_TOTP_SECRET: ${{ secrets.DHAN_TOTP_SECRET }}
+          GROWW_API_KEY: ${{ secrets.GROWW_API_KEY }}
+          GROWW_API_SECRET: ${{ secrets.GROWW_API_SECRET }}
+          GROWW_TOTP_SECRET: ${{ secrets.GROWW_TOTP_SECRET }}
+          IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
+          IBKR_FLEX_QUERY: ${{ secrets.IBKR_FLEX_QUERY }}
+          LONGBRIDGE_APP_KEY: ${{ secrets.LONGBRIDGE_APP_KEY }}
+          LONGBRIDGE_APP_SECRET: ${{ secrets.LONGBRIDGE_APP_SECRET }}
+          LONGBRIDGE_ACCESS_TOKEN: ${{ secrets.LONGBRIDGE_ACCESS_TOKEN }}
+          LONGBRIDGE_HOST: ${{ secrets.LONGBRIDGE_HOST }}
+          TASTY_CLIENT_SECRET: ${{ secrets.TASTY_CLIENT_SECRET }}
+          TASTY_REFRESH_TOKEN: ${{ secrets.TASTY_REFRESH_TOKEN }}
+          TASTY_ACCOUNT: ${{ secrets.TASTY_ACCOUNT }}
+          TASTY_SANDBOX: ${{ secrets.TASTY_SANDBOX }}
+          TRADIER_TOKEN: ${{ secrets.TRADIER_TOKEN }}
+          TRADIER_ACCOUNT: ${{ secrets.TRADIER_ACCOUNT }}
+          TRADIER_SANDBOX: ${{ secrets.TRADIER_SANDBOX }}
+          T212_KEY: ${{ secrets.T212_KEY }}
+          T212_SECRET: ${{ secrets.T212_SECRET }}
+          T212_DEMO: ${{ secrets.T212_DEMO }}
         run: python3 watch.py
       - name: Remember what was sent
         run: |

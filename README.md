@@ -60,7 +60,7 @@ Each row is one holding. Only `ticker` is needed; every other column is optional
 | `look_for` | the words that sit right before the number you care about in the company's results release | `Gross Bookings grew ... to` |
 | `test` | your line for that number, starting with at least, at most, above or below | `at least 45` |
 | `exposures` | what the company buys (cost) or sells (revenue), separated by `;` | `wti:cost` |
-| `keywords` | words for the morning headline, separated by `;` | `Uber; robotaxi` |
+| `keywords` | words for the morning headline, separated by `;`. Leave it empty and the company's name is used | `Uber; robotaxi` |
 | `yahoo` | only for a listing outside the US: Yahoo's symbol | `RELIANCE.NS` |
 | `note` | anything you want repeated back to you in the results message | `Fuel is the drivers' cost` |
 
@@ -71,6 +71,35 @@ A few things that make it work well:
 - **Not sure what a company is exposed to?** Its annual report says. On your own computer, `python watch.py --exposures UBER` lists every commodity and currency word in Uber's latest annual report with the sentence around it. The program only counts words; you decide which ones are real. In Uber's report the word "sugar" turns up twice, and both times it is the chairman, Ronald Sugar. Or give the annual report to Claude or ChatGPT once and ask which commodities and currencies are a real cost or revenue for the business.
 - **Put your main holdings at the top.** The morning headlines come from the top of the list down.
 - **Pick specific words for headlines.** A company name alone brings in everything with that name in it, so "Walmart" will also bring you a golf tournament. A product, a project or a place usually works better.
+
+## Connect your broker instead of keeping a list
+
+The list in `watchlist.csv` works with any broker, but you have to update it every time you buy or sell. If your broker offers an API (a door the broker opens so a program can read your account), the watcher can read your holdings from the broker before every check instead, so a new position is watched from the next run without you touching anything.
+
+The watcher only reads. Nothing in it places an order. The broker files come from GreekSoup, the open-source one-person equity research desk.
+
+**How to connect it:** add one more secret named `BROKER` with your broker's name from the table, then add the secrets that broker needs, the same way you added the Telegram ones. The keys come from your broker's own website; the link in the table goes to its instructions.
+
+| Broker | Where | `BROKER` | Secrets to add |
+|---|---|---|---|
+| [Alpaca](https://docs.alpaca.markets/) | United States | `alpaca` | `ALPACA_KEY`, `ALPACA_SECRET`, and `ALPACA_PAPER` set to `on` for a paper account |
+| [Interactive Brokers](https://www.interactivebrokers.com/campus/ibkr-api-page/flex-web-service/) | worldwide | `ibkr_flex` | `IBKR_FLEX_TOKEN`, `IBKR_FLEX_QUERY` (a Flex Query of your positions, made once in Client Portal) |
+| [Tradier](https://docs.tradier.com/) | United States | `tradier` | `TRADIER_TOKEN`, optional `TRADIER_ACCOUNT` |
+| [tastytrade](https://developer.tastytrade.com/) | United States | `tastytrade` | `TASTY_CLIENT_SECRET`, `TASTY_REFRESH_TOKEN`, optional `TASTY_ACCOUNT` |
+| [Trading 212](https://docs.trading212.com/api) | United Kingdom, Europe | `trading212` | `T212_KEY`, `T212_SECRET` |
+| [Longbridge](https://open.longbridge.com/docs) | Hong Kong, Singapore | `longbridge` | `LONGBRIDGE_APP_KEY`, `LONGBRIDGE_APP_SECRET`, `LONGBRIDGE_ACCESS_TOKEN` (renew it every ninety days) |
+| [Dhan](https://dhanhq.co/docs/v2/) | India | `dhan` | `DHAN_CLIENT_ID`, and either `DHAN_ACCESS_TOKEN` or `DHAN_PIN` with `DHAN_TOTP_SECRET` |
+| [Angel One](https://smartapi.angelone.in/docs) | India | `angel_one` | `ANGEL_API_KEY`, `ANGEL_CLIENT_CODE`, `ANGEL_PIN`, `ANGEL_TOTP_SECRET` |
+| [Groww](https://groww.in/trade-api/docs) | India | `groww` | `GROWW_API_KEY`, and `GROWW_API_SECRET` or `GROWW_TOTP_SECRET` |
+
+With a broker connected, the watcher watches everything the broker holds, plus anything else in `watchlist.csv`, so the list becomes the place for your notes: your line on the results, the exposures and the headline words for each holding, and the names you watch without owning. A holding that is not on the list is still watched for results, price moves and the morning headlines.
+
+**What to know before you do it:**
+
+- Your broker keys sit in your private copy's secrets, which GitHub encrypts and never shows again, even to you. Most brokers' keys can also trade, so treat them like a password: keep your copy private, and where your broker offers a read-only key, use that.
+- The Indian brokers in the table need your trading PIN and the secret behind your authenticator app, because their rules ask for a fresh login each day and this is how the watcher logs in by itself. If you would rather not store those, keep the list.
+- Brokers that need you to log in by hand every day (Schwab, Robinhood, Saxo, Zerodha, ICICI Direct, Upstox) cannot work on a schedule while you sleep, so for those the list is the way. Brokers with no API for individuals (Fidelity, Vanguard and most app-only brokers) are the same.
+- We tested the connection end to end with an Alpaca paper account. The other brokers use the same files as GreekSoup, where they are in use, but not every one has been run from GitHub's computers yet; if yours fails, the run says why in plain words, and the list still works.
 
 ## Set it for your market
 
