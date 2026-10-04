@@ -1213,8 +1213,9 @@ def main(argv):
                 ("📈 Big moves in your holdings", check_prices(rows, state)),
                 ("🛢 What your portfolio depends on", check_exposures(rows, state)),
                 ("🏦 Rates and markets", check_macro(state))]
-    if morning and any(blocks for _, blocks in sections):  # a quiet morning stays quiet: the calendar and
-        cal = calendar_today()                               # headlines ride along only when there is news
+    asked = "--morning" in argv  # pressed by hand: send the calendar and headlines even on a quiet day
+    if morning and (asked or any(blocks for _, blocks in sections)):  # a quiet morning stays quiet: the calendar
+        cal = calendar_today()                                         # and headlines ride along only with news
         if cal:
             sections.append((f"🗓 Today's US releases", cal))
         sections.append(("📰 Top headlines", headlines(rows, state)))
