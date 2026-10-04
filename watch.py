@@ -302,34 +302,83 @@ def fill_exposures(rows):
     return rows
 
 
-def broker_holdings():
-    """[(ticker, yahoo symbol, market value, shares)] read from your broker, when BROKER is set; [] when it is not.
-    The broker files come from GreekSoup's broker layer; they only read, they never trade."""
+def broker_read():
+    """{"label": "Alpaca", "account": "A/C ··6A8H", "rows": [(ticker, yahoo symbol, market value, shares)]}
+    read from your broker when BROKER is set, None when it is not. Raises an error in plain words
+    when the broker refuses. The broker files come from GreekSoup's broker layer; they only read,
+    they never trade."""
     bid = (os.environ.get("BROKER") or "").strip().lower()
     if not bid:
-        return []
-    import brokers  # needs the requests library; the GitHub workflow installs it
+        return None
+    try:
+        import brokers  # needs the requests library; the GitHub workflow installs it
+    except ImportError:
+        raise RuntimeError("The broker connection needs the requests library: pip install requests")
     module = brokers.load(bid)
     if not module:
-        sys.exit(f"BROKER is set to \"{bid}\", which the watcher does not know. "
-                 f"The ones it knows: {', '.join(brokers.REGISTRY)}.")
-    client = module.connect(brokers.config(bid))
+        raise RuntimeError(f"BROKER is set to \"{bid}\", which the watcher does not know. "
+                           f"The ones it knows: {', '.join(brokers.REGISTRY)}.")
+    cfg = brokers.config(bid)
+    missing = [f["env"] for f in module.META["fields"] if f.get("required", True) and not cfg.get(f["env"])]
+    if missing:
+        raise RuntimeError(f"{module.META['label']} needs the {', '.join(missing)} secret"
+                           f"{'s' if len(missing) > 1 else ''} as well (README, Connect your broker).")
+    try:
+        client = module.connect(cfg)
+        rows = module.equity(client)
+        account = module.label(client)
+    except brokers.BrokerError as e:
+        raise RuntimeError(str(e))
+    except Exception as e:
+        raise RuntimeError(f"{module.META['label']} could not be reached: {str(e)[:160]}")
     out = []
-    for row in module.equity(client):
+    for row in rows:
         ysym = (row.get("ysym") or row.get("code") or "").strip()
         ticker = ysym.split(".")[0].upper() if ysym.endswith((".NS", ".BO", ".L", ".TO")) else ysym.upper()
         if ticker and (row.get("qty") or 0):
             out.append((ticker, ysym, row.get("value") or 0, row.get("qty") or 0))
-    return out
+    return {"label": module.META["label"], "account": account, "rows": out}
+
+
+def broker_holdings():
+    read = broker_read()
+    return read["rows"] if read else []
+
+
+def broker_report(rows):
+    """The "test the broker connection" message: what the broker answered, or why it did not."""
+    if not (os.environ.get("BROKER") or "").strip():
+        return ("No broker is connected. The watcher is reading stocks.txt. To connect one, add a BROKER "
+                "secret and that broker's keys (README, Connect your broker).")
+    try:
+        read = broker_read()
+    except RuntimeError as e:
+        return (f"❌ <b>Your broker did not connect.</b>\n{esc(e)}\n\nWhat to check: the keys are pasted whole, "
+                f"with no spaces; a paper account's keys need ALPACA_PAPER or the broker's own sandbox switch set to on; "
+                f"the key is allowed to read the account. Until it connects, stocks.txt is used.")
+    held = read["rows"]
+    total = sum(v for _, _, v, _ in held)
+    names = ", ".join(sorted(t for t, _, _, _ in held))
+    extra = [r["ticker"] for r in rows if r["ticker"] not in {t for t, _, _, _ in held}]
+    lines = [f"✅ <b>{esc(read['label'])} connected</b> ({esc(read['account'])}).",
+             f"{len(held)} holding{'s' if len(held) != 1 else ''}" + (f" worth ${total:,.0f}" if total else "") + f": {esc(names)}."]
+    if extra:
+        lines.append(f"Plus {len(extra)} name{'s' if len(extra) != 1 else ''} from your list that the broker does not hold: {esc(', '.join(extra))}.")
+    lines.append("Every check reads the broker first, so a new position is watched from the next run.")
+    return "\n".join(lines)
 
 
 def portfolio(rows):
     """The names to watch: everything your broker holds, plus anything else on your list.
     The list's columns (your line, exposures, headline words) apply to a broker holding
     with the same ticker."""
-    held = broker_holdings()
+    try:
+        read = broker_read()
+    except RuntimeError as e:  # the broker refused: the list still works, and the run says why
+        return rows, "", str(e)
+    held = read["rows"] if read else []
     if not held:
-        return rows, ""
+        return rows, "", ""
     by_ticker = {r["ticker"]: r for r in rows}
     merged = []
     for ticker, ysym, value, qty in held:
@@ -340,7 +389,7 @@ def portfolio(rows):
         row["held"] = True
         merged.append(row)
     merged += list(by_ticker.values())  # the rest of your list: names you watch but do not hold
-    return merged, f"{len(held)} from your broker and {len(merged) - len(held)} more from your list"
+    return merged, f"{len(held)} from {read['label']} and {len(merged) - len(held)} more from your list", ""
 
 
 def load_state():
@@ -702,12 +751,75 @@ def subject_is(cik, accession, holding_cik):
     return bool(block) and int(block.group(1)) == holding_cik
 
 
+NSE_MATTERS = ["result", "board meeting", "dividend", "acquisition", "amalgamation", "merger", "demerger",
+               "buyback", "rating", "director", "resignation", "appointment", "auditor", "fund raising",
+               "investor presentation", "press release", "clarification", "bonus", "split", "order", "delisting"]
+
+
+def nse_get(path):
+    """NSE's public API, as its own website reads it. It answered GitHub's computers on 4 Oct 2026."""
+    try:
+        return json.loads(fetch(f"https://www.nseindia.com/api/{path}", {"User-Agent": BROWSERS[1], "Accept": "application/json",
+                                                                          "Referer": "https://www.nseindia.com/"}, timeout=20))
+    except Exception:
+        return None
+
+
+def nse_symbol(row):
+    sym = (row.get("yahoo") or row["ticker"]).upper()
+    return sym[:-3] if sym.endswith(".NS") else None
+
+
+def nse_filings(row, state):
+    """[line] of this NSE-listed company's announcements from the last days that a holder should see."""
+    sym = nse_symbol(row)
+    rows = nse_get(f"corporate-announcements?index=equities&symbol={urllib.parse.quote(sym)}") or []
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=RESULTS_LOOKBACK_DAYS)).strftime("%Y%m%d")
+    lines = []
+    for a in rows if isinstance(rows, list) else []:
+        key = f"nse|{sym}|{a.get('dt', '')}"
+        when = (a.get("dt") or "")[:8]  # ddmmyyyy
+        if len(when) != 8 or when[4:] + when[2:4] + when[:2] < cutoff or key in state["filings"]:
+            continue
+        state["filings"].append(key)
+        desc = (a.get("desc") or "").strip()
+        if not any(w in desc.lower() for w in NSE_MATTERS):
+            continue
+        text = re.sub(r"\s+", " ", a.get("attchmntText") or "").strip()
+        filed = nice_date(f"{when[4:]}-{when[2:4]}-{when[:2]}")
+        lines.append(f"• {esc(desc)}: {esc(text[:240])}{'...' if len(text) > 240 else ''} (filed with NSE {filed})."
+                     + (f" {link(a['attchmntFile'], 'Read it')}" if a.get("attchmntFile") else ""))
+    return lines[:6]
+
+
+def nse_results_date(row):
+    """The next board meeting with results on its agenda, from NSE's event calendar; None when none is listed."""
+    sym = nse_symbol(row)
+    events = nse_get(f"event-calendar?index=equities&symbol={urllib.parse.quote(sym)}") or []
+    today, best = date.today(), None
+    for e in events if isinstance(events, list) else []:
+        if "result" not in (e.get("purpose") or "").lower():
+            continue
+        try:
+            d = datetime.strptime(e.get("date") or "", "%d-%b-%Y").date()
+        except ValueError:
+            continue
+        if d >= today and (best is None or d < best):
+            best = d
+    return best.isoformat() if best else None
+
+
 def check_filings(rows, state):
     """Every new filing that matters, except results, which get their own message."""
     out = []
     cutoff = datetime.now(timezone.utc) - timedelta(days=RESULTS_LOOKBACK_DAYS)
     for row in rows:
         entry = companies().get(row["ticker"])
+        if not entry and nse_symbol(row):
+            lines = nse_filings(row, state)
+            if lines:
+                out.append(f"<b>{esc(nse_symbol(row))} (NSE)</b>\n" + "\n".join(lines))
+            continue
         if not entry:
             continue
         cik, r, lines = entry[0], submissions(entry[0]), []
@@ -732,6 +844,15 @@ def check_filings(rows, state):
                     dated = f"{traded}, filed {when}" if traded else f"filed {when}"
                     if bought:
                         line = f"{esc(person)} <b>bought</b> {money(bought)} of stock on the open market {dated}. {link(url, 'Form 4')}"
+                        buys = state.setdefault("buys", {}).setdefault(row["ticker"], [])
+                        since = (date.fromisoformat(state["today"]) - timedelta(days=30)).isoformat()
+                        buys[:] = [b for b in buys if b[1] >= since]
+                        others = {b[0] for b in buys if b[0] != who}
+                        if who not in {b[0] for b in buys}:
+                            buys.append([who, r["filingDate"][i]])
+                        if others:  # two or more different insiders buying in a month is the classic cluster
+                            nth = {1: "second", 2: "third", 3: "fourth"}.get(len(others), f"{len(others) + 1}th")
+                            line += f" The {nth} insider to buy on the open market in 30 days."
                     elif plan is False:
                         line = f"{esc(person)} sold {money(sold)} of stock {dated}, not under a pre-set plan. {link(url, 'Form 4')}"
                     elif plan is None:
@@ -750,6 +871,132 @@ def check_filings(rows, state):
                 state["filings"].append(acc)  # results are marked by the results check
         if lines:
             out.append(f"<b>{esc(name_of(row['ticker']))}</b>\n" + "\n".join(lines))
+    return out
+
+
+# ----------------------------------------------------------------------------- 1c. funds you follow (13F)
+
+FUNDS = os.path.join(HERE, "funds.txt")
+
+
+def fund_filer(name):
+    """(cik, name) for a fund in funds.txt. A number in the line is the SEC filer number and is used
+    as it is; otherwise EDGAR's full-text search of 13F filings finds the filer by name."""
+    m = re.search(r"\b(\d{4,10})\b", name)
+    if m:
+        return int(m.group(1)), re.sub(r"\s*\b\d{4,10}\b\s*", " ", name).strip() or name
+    q = urllib.parse.quote(f'"{name}"')
+    try:
+        hits = json.loads(sec_get(f"https://efts.sec.gov/LATEST/search-index?q={q}&forms=13F-HR")).get("hits", {}).get("hits", [])
+    except Exception:
+        return None, name
+    first = name.lower().split()[0]
+    for h in hits:
+        for dn in h.get("_source", {}).get("display_names", []):
+            mm = re.search(r"\(CIK (\d+)\)", dn)
+            if mm and first in dn.lower():
+                return int(mm.group(1)), re.sub(r"\s*\(.*$", "", dn).strip().title()
+    return None, name
+
+
+def parse_13f(cik, accession):
+    """{cusip6: {"issuer": ..., "value": $, "shares": n}} from one 13F's holdings table."""
+    folder = f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession.replace('-', '')}/"
+    try:
+        index = json.loads(sec_get(folder + "index.json"))
+    except Exception:
+        return {}
+    for item in index.get("directory", {}).get("item", []):
+        n = item.get("name", "")
+        if not n.lower().endswith(".xml") or "primary_doc" in n.lower():
+            continue
+        raw = sec_get(folder + n)
+        if "infoTable" not in raw:
+            continue
+        agg = {}
+        for blk in re.findall(r"<(?:\w+:)?infoTable>(.*?)</(?:\w+:)?infoTable>", raw, re.S):
+            tag = lambda t: (re.search(rf"<(?:\w+:)?{t}>\s*([^<]+?)\s*<", blk) or [None, ""])[1]
+            issuer, cusip = html.unescape(tag("nameOfIssuer")).strip(), tag("cusip").strip()
+            try:
+                value, shares = float(tag("value") or 0), float(tag("sshPrnamt") or 0)
+            except ValueError:
+                continue
+            if not issuer or not value:
+                continue
+            a = agg.setdefault(cusip[:6] if len(cusip) >= 6 else issuer.upper(), {"issuer": issuer.title(), "value": 0.0, "shares": 0.0})
+            a["value"] += value
+            a["shares"] += shares
+        if agg:
+            priced = sorted(r["value"] / r["shares"] for r in agg.values() if r["shares"])
+            if priced and priced[len(priced) // 2] < 2:  # a filer still reporting in thousands
+                for r in agg.values():
+                    r["value"] *= 1000
+            return agg
+    return {}
+
+
+def check_funds(rows, state):
+    """One message per new 13F from a fund in funds.txt: what it bought, sold, added and trimmed,
+    and which of your names are in it."""
+    if not os.path.exists(FUNDS):
+        return []
+    out = []
+    mine = {name_of(r["ticker"]).rsplit(" (", 1)[0].split()[0].lower(): r["ticker"] for r in rows if r["ticker"] in companies()}
+    for line in open(FUNDS, encoding="utf-8-sig"):
+        name = line.split("#")[0].strip()
+        if not name:
+            continue
+        cik, fund = fund_filer(name)
+        if not cik:
+            print(f"Could not find a 13F filer called \"{name}\"; add its SEC filer number to the line.")
+            continue
+        try:
+            r = submissions(cik)
+        except RuntimeError:
+            continue
+        periods = {}
+        for i, form in enumerate(r["form"]):
+            if form in ("13F-HR", "13F-HR/A") and r["reportDate"][i] not in periods:
+                periods[r["reportDate"][i]] = i
+        if not periods:
+            continue
+        newest = sorted(periods, reverse=True)
+        i = periods[newest[0]]
+        acc = r["accessionNumber"][i]
+        if acc in state["filings"]:
+            continue
+        cur = parse_13f(cik, acc)
+        if not cur:
+            continue
+        state["filings"].append(acc)
+        prev = parse_13f(cik, r["accessionNumber"][periods[newest[1]]]) if len(newest) > 1 else {}
+        total = sum(v["value"] for v in cur.values())
+        lines = [f"🏛 <b>{esc(fund)}</b> filed its holdings (13F) for the quarter to {nice_date(newest[0])}, "
+                 f"filed {nice_date(r['filingDate'][i])}: {len(cur)} positions worth {money(total)}."]
+        if prev:
+            new = sorted((v for k, v in cur.items() if k not in prev), key=lambda v: -v["value"])[:5]
+            gone = sorted((v for k, v in prev.items() if k not in cur), key=lambda v: -v["value"])[:5]
+            adds, trims = [], []
+            for k, v in cur.items():
+                if k in prev and prev[k]["shares"] and v["shares"]:
+                    chg = pct(v["shares"], prev[k]["shares"])
+                    (adds if chg >= 5 else trims if chg <= -5 else []).append((v, chg))
+            adds.sort(key=lambda x: -x[0]["value"]); trims.sort(key=lambda x: -x[0]["value"])
+            if new:
+                lines.append("New: " + ", ".join(f"{esc(v['issuer'])} ({money(v['value'])})" for v in new) + ".")
+            if gone:
+                lines.append("Sold out: " + ", ".join(esc(v["issuer"]) for v in gone) + ".")
+            if adds:
+                lines.append("Added to: " + ", ".join(f"{esc(v['issuer'])} ({chg:+.0f}% shares)" for v, chg in adds[:5]) + ".")
+            if trims:
+                lines.append("Trimmed: " + ", ".join(f"{esc(v['issuer'])} ({chg:+.0f}% shares)" for v, chg in trims[:5]) + ".")
+        top = sorted(cur.values(), key=lambda v: -v["value"])[:5]
+        lines.append("Largest: " + ", ".join(f"{esc(v['issuer'])} {v['value'] / total * 100:.0f}%" for v in top) + ".")
+        held = [f"{esc(v['issuer'])} ({money(v['value'])})" for v in cur.values() if v["issuer"].split()[0].lower() in mine]
+        if held:
+            lines.append("Among your names: " + ", ".join(held) + ".")
+        lines.append(link(f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc.replace('-', '')}/", "Open the filing"))
+        out.append("\n".join(lines))
     return out
 
 
@@ -801,6 +1048,39 @@ def breakout(series, digits=2, unit=""):
     return None
 
 
+TE_LEVEL = re.compile(
+    r"(?:rose|fell|increased|decreased|climbed|dropped|jumped|slipped|surged|plunged|edged\s+(?:up|down)|"
+    r"was\s+unchanged|remained\s+(?:unchanged|flat)|held\s+steady|hovered|traded\s+flat)\s+(?:to|at|around|near)?\s*"
+    r"([\d,]+(?:\.\d+)?)\s*([A-Za-z€$£¥][^<\n,]{0,28}?)\s+on\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})")
+TE_MONTH = re.compile(r"past\s+month[^.]*?(risen|fallen|increased|decreased|gained|lost)\s+([\d.]+)%")
+MONTH_MOVE = 10.0  # a benchmark with no daily price (uranium, lithium) fires on a month's move of this much
+
+
+def benchmark_month(slug):
+    """(level, unit, date, month change %) from the one summary sentence Trading Economics writes
+    for a benchmark that has no exchange contract. The same reader GreekSoup's commodity board uses;
+    a changed page gives None, never a wrong number."""
+    try:
+        r = subprocess.run(["curl", "-s", "-m", "25", "-A", BROWSERS[0], f"https://tradingeconomics.com/commodity/{slug}"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+        page = r.stdout.replace("&#39;", "'").replace("&amp;", "&")
+    except Exception:
+        return None
+    m = TE_LEVEL.search(page)
+    if not m:
+        return None
+    try:
+        level = float(m.group(1).replace(",", ""))
+        day = datetime.strptime(m.group(3), "%B %d, %Y").date().isoformat()
+    except ValueError:
+        return None
+    mo = TE_MONTH.search(page[m.start():m.start() + 600])
+    if not mo:
+        return None
+    sign = 1 if mo.group(1) in ("risen", "increased", "gained") else -1
+    return level, re.sub(r"\s+", " ", m.group(2)).strip(), day, sign * float(mo.group(2))
+
+
 def who_line(who, short=False):
     """Two plain lines: the names with costs tied to the item, and the names with revenue."""
     show = (lambda t: t) if short else name_of
@@ -832,6 +1112,14 @@ def check_exposures(rows, state):
             continue
         src = c.get("sources", {})
         series = yahoo(src["yahoo"], "5y") if src.get("yahoo") else []
+        if not series and src.get("te"):  # no daily price: the benchmark's own sentence, month moves only
+            read = benchmark_month(src["te"])
+            if read and abs(read[3]) >= MONTH_MOVE and quiet_since(state, f"month|{cid}"):
+                level, unit, day, chg = read
+                out.append(f"<b>{esc(c['label'])}</b>\n{level:,.2f} {esc(unit)} on {nice_date(day)}, "
+                           f"{'up' if chg > 0 else 'down'} {abs(chg):.0f}% over the past month (a benchmark price, "
+                           f"no daily contract).\n{esc(who_line(who, short=True))}")
+            continue
         if not series:
             continue  # only daily prices can break out; monthly series are too slow for this
         is_fx = c.get("group") == "Currency"
@@ -973,6 +1261,92 @@ def theme_headlines(state):
     return out
 
 
+# ----------------------------------------------------------------------------- dates: results and dividends
+
+def nasdaq_json(path):
+    try:
+        return json.loads(fetch(f"https://api.nasdaq.com/api/{path}", {"User-Agent": BROWSERS[0], "Accept": "application/json"})).get("data") or {}
+    except Exception:
+        return {}
+
+
+def mdy(text):
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", text or "")
+    return f"{m.group(3)}-{int(m.group(1)):02d}-{int(m.group(2)):02d}" if m else None
+
+
+def company_dates(ticker, state):
+    """The next results date and the next dividend dates for one US listing, from Nasdaq's own
+    pages (free, no key), fetched once a week and kept in the memory file."""
+    cache = state.setdefault("dates", {})
+    d = cache.get(ticker)
+    if d and (date.fromisoformat(state["today"]) - date.fromisoformat(d.get("fetched", "2000-01-01"))).days < 7:
+        return d
+    d = {"fetched": state["today"]}
+    if ticker.endswith(".NS"):
+        when = nse_results_date({"ticker": ticker})
+        if when:
+            d["results"], d["when"] = when, "board meeting"
+        cache[ticker] = d
+        return d
+    text = nasdaq_json(f"analyst/{ticker}/earnings-date").get("reportText") or ""
+    when = mdy(text)
+    if when:
+        d["results"] = when
+        d["when"] = "before the open" if "before market" in text else "after the close" if "after market" in text else ""
+        d["expected"] = "algorithm" in text or "estimated" in text  # Nasdaq's guess until the company confirms
+    div = nasdaq_json(f"quote/{ticker}/dividends?assetclass=stocks")
+    for r in (div.get("dividends") or {}).get("rows") or []:
+        ex = mdy(r.get("exOrEffDate") or "")
+        if ex and ex >= state["today"]:
+            d.update({"exdiv": ex, "amount": (r.get("amount") or "").strip(), "pay": mdy(r.get("paymentDate") or "")})
+            break
+    cache[ticker] = d
+    return d
+
+
+def weekday_date(iso):
+    dd = date.fromisoformat(iso)
+    return f"{dd:%a} {dd.day} {dd:%b}"
+
+
+def check_dates(rows, state):
+    """Coming up in the next two days: results and ex-dividend dates, each said once."""
+    out, today = [], date.fromisoformat(state["today"])
+    for row in rows:
+        if row["ticker"] not in companies() and not nse_symbol(row):
+            continue  # Nasdaq's pages cover US listings; NSE's calendar covers India
+        d = company_dates(row["ticker"], state)
+        for key, label in (("results", "results"), ("exdiv", "exdiv")):
+            iso = d.get(key)
+            if not iso:
+                continue
+            days = (date.fromisoformat(iso) - today).days
+            if 0 <= days <= 2 and first_today(state, f"due|{row['ticker']}|{iso}"):
+                name = esc(name_of(row["ticker"]))
+                day = "today" if days == 0 else "tomorrow" if days == 1 else f"on {weekday_date(iso)}"
+                if key == "results":
+                    out.append(f"<b>{name}</b> reports results {day}" + (f", {d['when']}" if d.get("when") else "")
+                               + ("." if not d.get("expected") else " (expected; the company has not confirmed the date)."))
+                else:
+                    out.append(f"<b>{name}</b> goes ex-dividend {day}" + (f": {esc(d['amount'])} a share" if d.get("amount") else "")
+                               + (f", paid {nice_date(d['pay'])}" if d.get("pay") else "") + ".")
+    return out
+
+
+def dividends_this_week(rows, state):
+    """[line] for the Monday check: ex-dividend dates in the next seven days."""
+    out, today = [], date.fromisoformat(state["today"])
+    for row in rows:
+        if row["ticker"] not in companies():
+            continue
+        d = company_dates(row["ticker"], state)
+        if d.get("exdiv") and 0 <= (date.fromisoformat(d["exdiv"]) - today).days <= 7:
+            out.append(f"{esc(name_of(row['ticker']))}: ex-dividend {weekday_date(d['exdiv'])}"
+                       + (f", {esc(d['amount'])} a share" if d.get("amount") else "") + (f", paid {nice_date(d['pay'])}" if d.get("pay") else ""))
+    return out
+
+
 # ----------------------------------------------------------------------------- the Monday portfolio check
 
 def results_this_week(tickers):
@@ -1059,8 +1433,16 @@ def portfolio_week(rows, state):
             lines.append(f"{esc(label)}: {'; '.join(parts)}.")
 
     due = results_this_week({r["ticker"] for r in held})
+    for r in held:  # NSE board meetings, and US dates Nasdaq's day calendar missed
+        d = state.get("dates", {}).get(r["ticker"]) or (company_dates(r["ticker"], state) if nse_symbol(r) else {})
+        if d.get("results") and r["ticker"] not in due and 0 <= (date.fromisoformat(d["results"]) - date.fromisoformat(state["today"])).days <= 6:
+            due[r["ticker"]] = weekday_date(d["results"]) + (f", {d['when']}" if d.get("when") else "")
     if due:
         lines += ["", "<b>Reporting results in the next five trading days</b>"] + [f"{esc(name_of(t))}: {when}" for t, when in due.items()]
+
+    divs = dividends_this_week(held, state)
+    if divs:
+        lines += ["", "<b>Dividends in the next seven days</b>"] + divs
 
     sales = state.pop("plan_sales", {})
     if sales:
@@ -1146,6 +1528,82 @@ def telegram(text, dry_run):
                                    headers={"Content-Type": "application/json"}), timeout=30).read()
 
 
+def edit_stocks(ticker, shares=None, remove=False):
+    """Change one line of stocks.txt: add or resize a name, or take it out. Returns what happened."""
+    lines = open(STOCKS, encoding="utf-8-sig").read().splitlines() if os.path.exists(STOCKS) else []
+    kept, found = [], False
+    for line in lines:
+        head = line.split("#")[0].replace(",", " ").split()
+        if head and head[0].upper() == ticker:
+            found = True
+            if not remove:
+                kept.append(f"{ticker} {shares}" if shares else ticker)
+            continue
+        kept.append(line)
+    if not found and not remove:
+        kept.append(f"{ticker} {shares}" if shares else ticker)
+    with open(STOCKS, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(kept).rstrip("\n") + "\n")
+    if remove:
+        return f"Removed {ticker} from stocks.txt." if found else f"{ticker} was not in stocks.txt."
+    what = f"{ticker} with {shares} shares" if shares else f"{ticker} as a name you watch"
+    return f"{'Updated' if found else 'Added'} {what} in stocks.txt. It is watched from the next check."
+
+
+def telegram_commands(rows, state, dry_run):
+    """Anything you wrote to the bot since the last check: a ticker sends that company's latest
+    results, "map" and "week" send those, "add UBER 120" and "remove UBER" change stocks.txt.
+    Only messages from your own chat count. Returns True when stocks.txt changed."""
+    token, chat = os.environ.get("TELEGRAM_TOKEN", "").strip(), os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat:
+        return False
+    try:
+        updates = json.loads(fetch(f"https://api.telegram.org/bot{token}/getUpdates?offset={state.get('tg_offset', 0)}&timeout=0")).get("result", [])
+        if "tg_offset" not in state:  # the first look: skip whatever was written before replies were read
+            state["tg_offset"] = (updates[-1]["update_id"] + 1) if updates else 0
+            return False
+    except urllib.error.HTTPError as e:
+        if e.code == 409:  # another program (Claude Code's Telegram channel, say) is reading this bot
+            print("Telegram replies are being read by another program, so the watcher leaves them to it.")
+        return False
+    except Exception as e:
+        print(f"Could not read replies: {e}")
+        return False
+    changed = False
+    for u in updates:
+        state["tg_offset"] = u["update_id"] + 1
+        msg = u.get("message") or {}
+        if str((msg.get("chat") or {}).get("id")) != chat:
+            continue
+        words = (msg.get("text") or "").strip().split()
+        if not words:
+            continue
+        cmd, rest = words[0].lower().lstrip("/"), words[1:]
+        if cmd == "map":
+            telegram(portfolio_map(rows), dry_run)
+        elif cmd == "week":
+            telegram(portfolio_week(rows, state), dry_run)
+        elif cmd == "add" and rest and re.fullmatch(r"[A-Za-z0-9.\-]{1,12}", rest[0]):
+            shares = rest[1] if len(rest) > 1 and re.fullmatch(r"\d+(\.\d+)?", rest[1]) else None
+            telegram(esc(edit_stocks(rest[0].upper(), shares)), dry_run)
+            changed = True
+        elif cmd == "remove" and rest and re.fullmatch(r"[A-Za-z0-9.\-]{1,12}", rest[0]):
+            telegram(esc(edit_stocks(rest[0].upper(), remove=True)), dry_run)
+            changed = True
+        elif len(words) == 1 and re.fullmatch(r"[A-Za-z0-9.\-]{1,12}", words[0]):
+            t = words[0].upper()
+            picked = [r for r in rows if r["ticker"] == t] or [{"ticker": t, "exposures": [], "keywords": []}]
+            found = check_results(picked, state, replay=True)
+            for m in found:
+                telegram(m, dry_run)
+            if not found:
+                telegram(f"No results filing found for {esc(t)} at the SEC.", dry_run)
+        else:
+            telegram("I can send a company's latest results (write its ticker, SPGI), the map (map), the Monday "
+                     "check (week), and change your list (add UBER 120, remove UBER).", dry_run)
+    return changed
+
+
 def print_chat_id():
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
     updates = json.loads(fetch(f"https://api.telegram.org/bot{token}/getUpdates")).get("result", [])
@@ -1164,8 +1622,10 @@ def portfolio_map(rows):
     held = exposure_map(rows)
     for cid, who in sorted(held.items(), key=lambda kv: -len(kv[1])):
         label = book.get(cid, {}).get("label", cid)
-        daily = book.get(cid, {}).get("sources", {}).get("yahoo")  # only a daily price can break out
-        note = "" if daily else " <i>(no free daily price, so it is on the map but not watched)</i>"
+        srcs = book.get(cid, {}).get("sources", {})
+        note = ("" if srcs.get("yahoo") else  # a daily price breaks out of its range; a benchmark fires on a month's move
+                f" <i>(a benchmark with no daily price: watched for a month's move of {MONTH_MOVE:g}% or more)</i>" if srcs.get("te")
+                else " <i>(no free price, so it is on the map but not watched)</i>")
         lines.append(f"<b>{esc(label)}</b>{note}\n{esc(who_line(who, short=True))}\n")
     guessed = [r["ticker"] for r in rows if r.get("guessed")]
     if guessed:
@@ -1196,9 +1656,16 @@ def main(argv):
             print(f"::warning title=Not set up yet::{note}")
         return
     first_run = not os.path.exists(STATE)
-    rows, source = portfolio(read_watchlist())
+    rows, source, broker_problem = portfolio(read_watchlist())
     rows = fill_exposures(rows)
     state = load_state()
+    if "--broker" in argv:
+        return telegram(broker_report(rows), dry_run)
+    if not dry_run and telegram_commands(rows, state, dry_run):  # the list changed: read it again
+        rows, source, broker_problem = portfolio(read_watchlist())
+        rows = fill_exposures(rows)
+    if broker_problem and first_today(state, "broker_problem"):  # once a day, then the list carries on
+        telegram(f"⚠️ <b>Your broker did not connect.</b>\n{esc(broker_problem)}\nWatching stocks.txt instead until it does.", dry_run)
 
     if "--replay" in argv:
         t = argv[argv.index("--replay") + 1].upper()
@@ -1221,7 +1688,10 @@ def main(argv):
         if not any((r.get("shares") or "").strip() or r.get("value") for r in rows):
             hello += ["", "stocks.txt has no share counts yet, so the Monday check will count every name as "
                           "the same size. Put the shares after each ticker (UBER 120) and it weights your book."]
-        unknown = [r["ticker"] for r in rows if r["ticker"] not in companies()]
+        unknown = [r["ticker"] for r in rows if r["ticker"] not in companies() and not nse_symbol(r)]
+        nse = [nse_symbol(r) for r in rows if nse_symbol(r)]
+        if nse:
+            hello += ["", f"Listed on NSE, so results dates and announcements come from the exchange: {esc(', '.join(nse))}."]
         if unknown:
             hello += ["", f"Not filed with the SEC, so no results or filings check, only prices and headlines: "
                           f"{esc(', '.join(unknown))}."]
@@ -1239,9 +1709,11 @@ def main(argv):
         state["fired"]["week"] = monday.isoformat()  # the first morning of each week
         telegram(portfolio_week(rows, state), dry_run)
     sections = [("🗂 New filings", check_filings(rows, state)),
+                ("🏛 Funds you follow", check_funds(rows, state)),
                 ("📈 Big moves in your holdings", check_prices(rows, state)),
                 ("🛢 What your portfolio depends on", check_exposures(rows, state)),
-                ("🏦 Rates and markets", check_macro(state))]
+                ("🏦 Rates and markets", check_macro(state)),
+                ("🗓 Coming up", check_dates(rows, state))]
     asked = "--morning" in argv  # pressed by hand: send the calendar and headlines even on a quiet day
     if morning and (asked or any(blocks for _, blocks in sections)):  # a quiet morning stays quiet: the calendar
         cal = calendar_today()                                         # and headlines ride along only with news

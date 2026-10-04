@@ -1,0 +1,7 @@
+# Funds whose quarterly holdings (13F filings at the SEC) you want to hear about, one per line.
+# Write the name as the fund files it; the program finds the filer. If it cannot, add the fund's
+# SEC filer number after the name (search the fund on sec.gov/edgar and copy the CIK).
+# When a new filing lands you get one message: what it bought, sold, added and trimmed, and which
+# of your own names are in it. Remove the # to switch a line on.
+# Berkshire Hathaway
+# Pershing Square Capital Management

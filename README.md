@@ -46,9 +46,11 @@ After that, each check sends one message, in this order of priority, and only th
 3. **Big moves in your holdings.** A holding that moved 5% or more in a day, with its move over the past month for context.
 4. **What your portfolio depends on.** A commodity or currency your holdings are tied to breaking out of its range: a new three-month high or low, with the range it had been in and the names in your portfolio tied to it. A swing of a few percent inside a range is noise, so it never fires.
 5. **Rates and markets.** The 10-year and 2-year Treasury yields, high-yield credit spreads and the dollar reaching a three-month high or low, and the VIX crossing above 25, each with one line on why it matters.
-6. **In the morning, riding along only when one of the sections above has news:** the day's high-impact US releases (CPI, jobs, the Fed), the newest headline that names each of your first three holdings, and one headline from a trusted outlet for each theme you follow in `themes.txt` (a strait, a war, a tariff).
+6. **Coming up.** The day before a holding reports results ("S&P Global reports results tomorrow, before the open") and the day before it goes ex-dividend, with the amount and the payment date. The dates come from Nasdaq's own pages, and a date the company has not confirmed yet says so.
+7. **Funds you follow.** Name a fund in `funds.txt` (Berkshire Hathaway, say) and when its quarterly holdings filing (13F) lands you get one message: what it bought, sold out of, added to and trimmed, its largest positions, and which of your own names are in it.
+8. **In the morning, riding along only when one of the sections above has news:** the day's high-impact US releases (CPI, jobs, the Fed), the newest headline that names each of your first three holdings, and one headline from a trusted outlet for each theme you follow in `themes.txt` (a strait, a war, a tariff).
 
-**Every Monday morning, the portfolio as a whole:** your largest positions, how the portfolio moved over the last five trading days, how much of it has revenue or costs tied to each commodity and currency, which holdings report results in the next five trading days, and the insider sales under pre-set plans since the Monday before. It describes your portfolio; it never tells you what to do with it. If your list has no share counts, it says so and counts names instead of inventing weights.
+**Every Monday morning, the portfolio as a whole:** your largest positions, how the portfolio moved over the last five trading days, how much of it has revenue or costs tied to each commodity and currency, which holdings report results in the next five trading days, the dividends going ex in the next seven, and the insider sales under pre-set plans since the Monday before. It describes your portfolio; it never tells you what to do with it. If your list has no share counts, it says so and counts names instead of inventing weights.
 
 Once something fires, it stays quiet for five days, so a trend does not message you every day. A quiet day, morning included, sends nothing.
 
@@ -126,7 +128,7 @@ SPGI 15
 NXPI
 ```
 
-The shares are what the Monday check uses to weight your portfolio. For a listing outside the US, use Yahoo Finance's symbol (`RELIANCE.NS 10`); the results and filings checks cover companies that file with the SEC, and the hello message names any that do not.
+The shares are what the Monday check uses to weight your portfolio. For a listing outside the US, use Yahoo Finance's symbol (`RELIANCE.NS 10`). The results and filings checks cover companies that file with the SEC; an Indian listing (`.NS`) gets its results date from NSE's event calendar and its announcements from NSE's own feed (results, board meetings, dividends, acquisitions, ratings, directors, buybacks), and the hello message names any listing that gets neither.
 
 **What your stocks depend on is filled in for you where it is plain.** The program reads each company's industry code at the SEC and ties a copper miner to copper, a utility to natural gas, an apparel maker to cotton, an airline to crude, and so on. The codes are broad: a ride-hailing app is filed as "business services", so its fuel cost is not guessed, and currencies are never guessed. The first message tells you which names it filled in and which are still unknown.
 
@@ -153,7 +155,9 @@ A few things that help:
 
 The list in `stocks.txt` works with any broker, but you have to update it every time you buy or sell. If your broker offers an API (a door the broker opens so a program can read your account), the watcher can read your holdings from the broker before every check instead, so a new position is watched from the next run without you touching anything.
 
-**How it works.** You add one more setting named `BROKER` with your broker's name from the table, and the keys that broker hands out from its own website, the same way you added the Telegram ones. At the start of every run the program signs in with those keys, asks the broker for the list of what the account holds and what each holding is worth, and uses that as your list: every holding is watched, and the Monday check weights the portfolio by the broker's own values. Anything in `stocks.txt` that the broker does not hold is still watched as a name you follow, and your extras in `watchlist.csv` still apply. The hello message tells you what it found, for example "6 from your broker and 17 more from your list".
+**How it works.** You add one more setting named `BROKER` with your broker's name from the table, and the keys that broker hands out from its own website, the same way you added the Telegram ones. At the start of every run the program signs in with those keys, asks the broker for the list of what the account holds and what each holding is worth, and uses that as your list: every holding is watched, and the Monday check weights the portfolio by the broker's own values. Anything in `stocks.txt` that the broker does not hold is still watched as a name you follow, and your extras in `watchlist.csv` still apply. The hello message tells you what it found, for example "6 from Alpaca and 17 more from your list".
+
+**Check it the moment you add the keys.** On **Run workflow**, pick "test the broker connection". Within a minute your phone gets either a line like "Alpaca connected (A/C ··6A8H). 6 holdings worth $98,653: ACN, BOXX, HGV, SOLS, SPGI, UBER" or "Your broker did not connect" with the reason in plain words and what to check. If the broker ever stops answering later, a run tells you once that day and carries on with `stocks.txt`; nothing goes quiet without saying so.
 
 The watcher only reads. Nothing in it places an order. The broker files are the same ones [GreekSoup](https://github.com/shubhamsborkar/greeksoup), the open-source one-person equity research desk, uses to read readers' accounts, and each broker's name in the table links to the GreekSoup page that shows where its keys are made.
 
@@ -196,25 +200,41 @@ The thresholds sit at the top of `watch.py`, each with a line saying what it doe
 
 Only in two places, and both are optional. When you build your list, an AI can read each annual report once and tell you what each company buys and sells. And when a press release is laid out in a way the code cannot read, you can add an `OPENROUTER_API_KEY` secret, and a cheap model is asked for that one sentence. The program keeps the sentence only if it is word for word in the release, and the message says it was read by the model.
 
-## Ask it questions (optional)
+## Write back to it
 
-The watcher only talks; it does not answer. If you want to reply to an alert in Telegram and ask "what does this filing mean?", Claude Code can be connected to the same bot. Ask Claude to set it up for you: the Telegram channel for Claude Code works while Claude Code is running on your computer, and a routine in Anthropic's cloud can do it with your computer off. Both are research previews at the time of writing, so the steps may change.
+Anything you write to the bot is read at the next check, and only your own chat counts:
+
+- A ticker (`SPGI`) sends that company's latest results, marked as a replay.
+- `map` sends the map of how your holdings connect; `week` sends the Monday check.
+- `add UBER 120` puts Uber with 120 shares into `stocks.txt`; `add NVDA` adds a name you watch; `remove UBER` takes it out. The change is saved into your copy, so you never need the browser for a trade.
+
+The answer arrives at the next check, so up to half a day later; the program runs twice a day and does not sit waiting for messages. If you also connect Claude Code's Telegram channel to the same bot, Telegram lets only one program read the replies, and the watcher steps aside and says so in its log.
+
+**Ask it questions (optional).** For a real conversation, "what does this filing mean?", Claude Code can be connected to the same bot. Ask Claude to set it up for you: the Telegram channel for Claude Code works while Claude Code is running on your computer, and a routine in Anthropic's cloud can do it with your computer off. Both are research previews at the time of writing, so the steps may change.
 
 ## Limits
 
 - A headline is matched on the first two words of the company's name (Hilton Grand, S&P Global) or its ticker, so a story about another company with a similar name can still slip through; the link always shows which it is.
 - The results quotes work on most US releases. A release laid out only as tables gives fewer lines, and a company that leads with its own measure (PTC leads with ARR) may show only the outlook; the link is always there. When the code cannot find your own words, the message says so.
-- Companies listed outside the US do not file with the SEC, so they get the price, exposure and headline checks but no results or filings check. The hello message names them.
-- Some commodities have no free daily price (uranium, lithium and a few others). They appear on the map, marked as not watched, because only a daily price can break out of a range.
-- Dividends are not tracked yet.
+- Companies listed outside the US and India do not file with the SEC or NSE, so they get the price, exposure and headline checks but no results or filings check. The hello message names them.
+- Some commodities have no exchange contract and so no daily price (uranium, lithium, coking coal and a few others). For those the program reads the benchmark's own weekly or monthly summary and fires only on a move of 10% or more over a month; the map says which items are watched that way. A changed page gives nothing rather than a wrong number.
+- Results and dividend dates come from Nasdaq's pages for US listings and from NSE's event calendar for India; a date Nasdaq has only estimated is marked as expected.
 - Yahoo Finance's price data is free but unofficial, and it can change without notice.
 - This program sends information. It does not tell you what to buy or sell, and it places no orders.
 
 ## Run it on your own computer instead
 
-If you would rather not use GitHub, it also runs on your own computer with Python and no installs: set the same settings as environment variables and run `python watch.py`. It only checks while the computer is on, so you need a scheduler (Task Scheduler on Windows, launchd or cron on a Mac) to run it twice a day. On a Mac whose Python came from python.org, the program notices the missing certificates and reads through curl instead.
+Most people never need this section: on GitHub there is nothing to install, on Windows or anywhere else. It is here for anyone who would rather keep the program on their own computer. No administrator rights are needed at any step.
 
-Other ways to run it by hand:
+1. **Get the folder.** Click the green **Code** button at the top of this page, choose **Download ZIP**, and unzip it. Any folder of your own will do, Documents for example.
+2. **Python.** The program needs Python 3.10 or newer and nothing else. On Windows, get it from the Microsoft Store (search "Python 3.12"), which needs no administrator, or from python.org: in that installer tick **Add python.exe to PATH** and leave **Use admin privileges** unticked. A Mac has Python, or python.org has it. (The broker route needs one extra library, `pip install requests`.)
+3. **Your settings.** In the folder, copy `settings.example.txt`, name the copy `settings.txt`, and fill in the three lines: the Telegram token, your chat ID and your email, the same three as on GitHub. The file stays on your computer.
+4. **Your stocks.** Edit `stocks.txt` the same way as on GitHub.
+5. **Switch it on.** Double-click **Keep Watching.bat** on Windows, or **Keep Watching.command** on a Mac. It registers the program to run every weekday at 08:30 and 17:30 by your computer's clock (the two times sit at the top of the file if your market keeps other hours), using Task Scheduler on Windows and launchd on a Mac, for your own account only. Then it runs once, so your phone gets the hello and the map. **Stop Watching** undoes it.
+
+The program checks only while the computer is on and you are logged in; GitHub's computers never sleep, which is why the GitHub route is the default. On Windows the program was proven on a Windows Server 2025 machine on GitHub's runners, with Python 3.12: the messages, the settings file and the two scheduled tasks. A Mac whose Python came from python.org has no certificates until that installer's own "Install Certificates" step is run; the program notices and reads through curl instead.
+
+Other ways to run it by hand, from a terminal in the folder:
 
 - `python watch.py --dry-run` prints the message instead of sending it.
 - `python watch.py --morning` includes the calendar and headlines now.

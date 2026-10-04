@@ -18,13 +18,14 @@ on:
           - "the morning note (calendar and headlines included)"
           - "the Monday portfolio check"
           - "the map of how your holdings connect"
+          - "test the broker connection"
       replay:
         description: "Or a ticker whose latest results to send again, to see what a results message looks like (for example ACN)"
         required: false
         default: ""
 
 permissions:
-  contents: write          # lets the run save state.json, so you never get the same alert twice
+  contents: write          # lets the run save state.json (its memory) and a stocks.txt you changed from Telegram
 
 jobs:
   watch:
@@ -81,6 +82,7 @@ jobs:
             *morning*) FLAG="--morning" ;;
             *Monday*)  FLAG="--week" ;;
             *map*)     FLAG="--map" ;;
+            *broker*)  FLAG="--broker" ;;
             *)         FLAG="" ;;
           esac
           if [ -n "$REPLAY" ]; then python3 watch.py --replay "$REPLAY"; else python3 watch.py $FLAG; fi
@@ -88,5 +90,5 @@ jobs:
         run: |
           git config user.name "earnings-watcher"
           git config user.email "earnings-watcher@users.noreply.github.com"
-          [ -f state.json ] && git add state.json || exit 0
+          git add state.json stocks.txt 2>/dev/null || exit 0
           git diff --cached --quiet || (git commit -m "Remember what was sent" && git push)
