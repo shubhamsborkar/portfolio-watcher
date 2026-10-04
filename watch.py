@@ -511,6 +511,7 @@ def insider_trade(cik, accession, document):
     role = ROLES.get(title.lower(), title) if title and "remarks" not in title.lower() else (
         "director" if field("isDirector", x) in ("1", "true") else "officer" if field("isOfficer", x) in ("1", "true") else "")
     bought = sold = 0.0
+    days = []
     for t in re.findall(r"<nonDerivativeTransaction>(.*?)</nonDerivativeTransaction>", x, re.S):
         try:
             n, px = float(field("transactionShares", t) or 0), float(field("transactionPricePerShare", t) or 0)
@@ -519,9 +520,13 @@ def insider_trade(cik, accession, document):
         code = field("transactionCode", t)
         bought += n * px if code == "P" else 0
         sold += n * px if code == "S" else 0
+        if code in ("P", "S") and field("transactionDate", t):
+            days.append(field("transactionDate", t)[:10])
     if not bought and not sold:
         return None
-    return who, role, bought, sold, field("aff10b5One", x) in ("1", "true")
+    traded = (f"on {nice_date(min(days))}" if len(set(days)) == 1 else
+              f"between {nice_date(min(days))} and {nice_date(max(days))}") if days else ""
+    return who, role, bought, sold, field("aff10b5One", x) in ("1", "true"), traded
 
 
 def subject_is(cik, accession, holding_cik):
@@ -555,24 +560,25 @@ def check_filings(rows, state):
             if form in ("8-K", "8-K/A") and "2.02" not in items:
                 said = [ITEMS_8K[x] for x in items if x in ITEMS_8K]
                 if said:
-                    line = f"{when}: the company {'; '.join(said)} (8-K). {link(url, 'Read it')}"
+                    line = f"The company {'; '.join(said)} (8-K, filed {when}). {link(url, 'Read it')}"
             elif form == "4":
                 trade = insider_trade(cik, acc, r["primaryDocument"][i])
                 if trade:
-                    who, role, bought, sold, plan = trade
+                    who, role, bought, sold, plan, traded = trade
                     person = f"{who} ({role})" if role else who
+                    dated = f"{traded}, filed {when}" if traded else f"filed {when}"
                     if bought:
-                        line = f"{when}: {esc(person)} <b>bought</b> {money(bought)} of stock on the open market. {link(url, 'Form 4')}"
+                        line = f"{esc(person)} <b>bought</b> {money(bought)} of stock on the open market {dated}. {link(url, 'Form 4')}"
                     elif not plan:
-                        line = f"{when}: {esc(person)} sold {money(sold)} of stock, not under a pre-set plan. {link(url, 'Form 4')}"
+                        line = f"{esc(person)} sold {money(sold)} of stock {dated}, not under a pre-set plan. {link(url, 'Form 4')}"
                     else:  # routine: added up in the Monday portfolio check
                         state.setdefault("plan_sales", {}).setdefault(row["ticker"], 0)
                         state["plan_sales"][row["ticker"]] += sold
             elif form in ("10-Q", "10-K", "20-F", "40-F"):
                 kind = "quarterly report" if form == "10-Q" else "annual report"
-                line = f"{when}: filed its {kind} ({form}). {link(url, 'Read it')}"
+                line = f"Filed its {kind} ({form}) on {when}. {link(url, 'Read it')}"
             elif form.startswith(("SC 13D", "SCHEDULE 13D")) and subject_is(cik, acc, cik):
-                line = f"{when}: an investor filed or updated an activist-size stake (13D). {link(url, 'Read it')}"
+                line = f"An investor filed or updated an activist-size stake (13D, filed {when}). {link(url, 'Read it')}"
             if line:
                 lines.append("• " + line)
             if not (form in ("8-K", "8-K/A") and "2.02" in items):
