@@ -1,4 +1,4 @@
-ticker,look_for,test,exposures,keywords,note
-AAPL,quarterly revenue of,at least 100,eurusd:revenue; usdcny:revenue,Apple tariffs,Example row. Replace with your own holdings.
-MSFT,Revenue was,at least 85,eurusd:revenue,Microsoft Azure,Example row.
-XOM,,,wti:revenue; natgas_us:revenue,Strait of Hormuz,Example of a holding watched for its commodity and the news only.
+ticker,shares,look_for,test,exposures,keywords,note
+AAPL,50,quarterly revenue of,at least 100,eurusd:revenue; usdcny:revenue,Apple tariffs,Example row. Replace with your own holdings.
+MSFT,20,Revenue was,at least 85,eurusd:revenue,Microsoft Azure,Example row.
+XOM,,,,wti:revenue; natgas_us:revenue,,Example of a name watched but not owned (no shares).

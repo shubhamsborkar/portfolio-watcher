@@ -11,10 +11,13 @@ Your holdings are connected to each other through what they buy, what they sell 
 After that, each check sends one message, in this order of priority, and only the parts that have something in them:
 
 1. **Results.** When a company on your list files its results with the SEC (a form 8-K with item 2.02), the program opens the press release, finds the number you wrote down for that company, and tells you whether the release cleared your line, with the sentence it read and the link. Each result gets its own message.
-2. **Big moves in your holdings.** A holding that moved 5% or more in a day.
-3. **What your portfolio depends on.** A commodity or currency your holdings are tied to breaking out of its range: a new three-month high or low, with the range it had been in, and the names in your portfolio tied to it. A swing of a few percent inside a range is noise, so it never fires. Crude can go from 90 to 110 and back inside a month without telling you anything about a holding that buys fuel.
-4. **Rates and markets.** The 10-year and 2-year Treasury yields, high-yield credit spreads and the dollar reaching a three-month high or low, and the VIX crossing above 25, each with one line on why it matters.
-5. **In the morning only:** the day's high-impact US releases (CPI, jobs, the Fed), the newest headline that names each of your first five holdings, and one headline from a trusted outlet for each theme you follow in `themes.txt` (a strait, a war, a tariff).
+2. **New filings.** Everything else a holder should hear about from the SEC, in plain words with a link to the filing: an insider buying shares on the open market, an insider selling outside a pre-set trading plan, a material 8-K (a major agreement signed or ended, an acquisition, new debt, restructuring costs, a write-down, a senior officer joining or leaving, a change of auditor, earlier accounts that can no longer be relied on), the quarterly and annual reports, and an investor filing an activist-size stake (13D). Routine insider sales under pre-set plans are added up and shown once a week instead.
+3. **Big moves in your holdings.** A holding that moved 5% or more in a day, with its move over the past month for context.
+4. **What your portfolio depends on.** A commodity or currency your holdings are tied to breaking out of its range: a new three-month high or low, with the range it had been in, and the names in your portfolio tied to it. A swing of a few percent inside a range is noise, so it never fires. Crude can go from 90 to 110 and back inside a month without telling you anything about a holding that buys fuel.
+5. **Rates and markets.** The 10-year and 2-year Treasury yields, high-yield credit spreads and the dollar reaching a three-month high or low, and the VIX crossing above 25, each with one line on why it matters.
+6. **In the morning only:** the day's high-impact US releases (CPI, jobs, the Fed), the newest headline that names each of your first three holdings, and one headline from a trusted outlet for each theme you follow in `themes.txt` (a strait, a war, a tariff).
+
+**Every Monday morning, the portfolio as a whole:** your largest positions, how the portfolio moved over the last five trading days, how much of it has revenue or costs tied to each commodity and currency (for example, 43% of the portfolio earning revenue tied to the euro), which holdings report results in the next five trading days, and the insider sales under pre-set plans since the Monday before. It describes your portfolio; it never tells you what to do with it.
 
 Once something fires, it stays quiet for five days, so a trend does not message you every day.
 
@@ -56,12 +59,13 @@ Each row is one holding. Only `ticker` is needed; every other column is optional
 
 | Column | What to put in | Example |
 |---|---|---|
-| `ticker` | the US ticker | `UBER` |
+| `ticker` | the ticker | `UBER` |
 | `look_for` | the words that sit right before the number you care about in the company's results release | `Gross Bookings grew ... to` |
 | `test` | your line for that number, starting with at least, at most, above or below | `at least 45` |
 | `exposures` | what the company buys (cost) or sells (revenue), separated by `;` | `wti:cost` |
 | `keywords` | words that put matching stories first in the morning headline, separated by `;` | `robotaxi` |
 | `yahoo` | only for a listing outside the US: Yahoo's symbol | `RELIANCE.NS` |
+| `shares` | how many shares you hold, so the Monday check can weight the portfolio. Leave it empty for a name you watch but do not own | `120` |
 | `note` | anything you want repeated back to you in the results message | `Fuel is the drivers' cost` |
 
 A few things that make it work well:
@@ -138,6 +142,7 @@ Other ways to run it by hand:
 - `python watch.py --dry-run` prints the message instead of sending it.
 - `python watch.py --morning` includes the calendar and headlines now.
 - `python watch.py --map` sends the map of how your holdings connect.
+- `python watch.py --week` sends the Monday portfolio check now.
 - `python watch.py --replay ACN` re-reads Accenture's latest results and sends them again.
 - `python watch.py --chat-id` prints your chat ID after you message your bot.
 

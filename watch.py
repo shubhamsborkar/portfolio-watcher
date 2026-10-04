@@ -65,7 +65,7 @@ NEAR_FIVE_YEAR_HIGH = 2.0     # a commodity within this % of its five-year high
 QUIET_DAYS = 5                # once an item has fired, it stays quiet this many days
 RESULTS_LOOKBACK_DAYS = 3     # a filing older than this is never messaged
 HEADLINES_PER_HOLDING = 1
-HEADLINES_IN_TOTAL = 5        # taken from the top of your watchlist down, so put your main holdings first
+HEADLINES_IN_TOTAL = 3        # taken from the top of your watchlist down, so put your main holdings first
 
 # Rates and markets from FRED (the St. Louis Fed's free database): a new three-month high or
 # low fires, and the VIX fires when it crosses above 25. The last field says why it matters.
@@ -136,8 +136,17 @@ def sec_get(url):
             time.sleep(3)
 
 
+_YAHOO = {}
+
+
 def yahoo(symbol, rng="5y"):
-    """Daily closes [(date, close)] for a stock, commodity future or currency pair."""
+    """Daily closes [(date, close)] for a stock, commodity future or currency pair (cached per run)."""
+    if (symbol, rng) not in _YAHOO:
+        _YAHOO[(symbol, rng)] = _yahoo(symbol, rng)
+    return _YAHOO[(symbol, rng)]
+
+
+def _yahoo(symbol, rng):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(symbol)}?range={rng}&interval=1d"
     for ua in BROWSERS:
         try:
@@ -184,7 +193,7 @@ def read_watchlist():
 
 
 def broker_holdings():
-    """[(ticker, yahoo symbol)] read from your broker, when BROKER is set; [] when it is not.
+    """[(ticker, yahoo symbol, market value)] read from your broker, when BROKER is set; [] when it is not.
     The broker files come from GreekSoup's broker layer; they only read, they never trade."""
     bid = (os.environ.get("BROKER") or "").strip().lower()
     if not bid:
@@ -200,7 +209,7 @@ def broker_holdings():
         ysym = (row.get("ysym") or row.get("code") or "").strip()
         ticker = ysym.split(".")[0].upper() if ysym.endswith((".NS", ".BO", ".L", ".TO")) else ysym.upper()
         if ticker and (row.get("qty") or 0):
-            out.append((ticker, ysym))
+            out.append((ticker, ysym, row.get("value") or 0))
     return out
 
 
@@ -213,8 +222,9 @@ def portfolio(rows):
         return rows, ""
     by_ticker = {r["ticker"]: r for r in rows}
     merged = []
-    for ticker, ysym in held:
+    for ticker, ysym, value in held:
         row = by_ticker.pop(ticker, {"ticker": ticker, "exposures": [], "keywords": []})
+        row["value"] = value
         if ysym and ysym.upper() != ticker:
             row["yahoo"] = ysym
         row["held"] = True
@@ -294,7 +304,7 @@ def name_of(ticker):
 # ----------------------------------------------------------------------------- 1. results
 
 def results_filings(cik):
-    recent = json.loads(sec_get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json"))["filings"]["recent"]
+    recent = submissions(cik)
     out = []
     for i, form in enumerate(recent["form"]):
         items = [x.strip() for x in (recent["items"][i] or "").split(",")]
@@ -442,6 +452,134 @@ def check_results(rows, state, replay=False):
             if not replay:
                 state["filings"].append(f["accession"])
     return messages
+
+
+# ----------------------------------------------------------------------------- 1b. every other filing that matters
+
+ITEMS_8K = {  # the 8-K items a holder wants to hear about, in plain words
+    "1.01": "signed a major agreement", "1.02": "ended a major agreement", "1.03": "filed for bankruptcy",
+    "1.05": "disclosed a cybersecurity incident", "2.01": "completed an acquisition or a sale of assets",
+    "2.03": "took on a major new debt or obligation", "2.04": "had a debt obligation accelerated",
+    "2.05": "announced restructuring or exit costs", "2.06": "booked an impairment (a write-down)",
+    "3.01": "received a delisting notice", "3.02": "sold shares outside a public offering",
+    "4.01": "changed its auditor", "4.02": "said earlier financial statements can no longer be relied on",
+    "5.01": "had a change in control", "5.02": "had a director or senior officer join or leave",
+    "5.03": "changed its bylaws or fiscal year", "7.01": "published a disclosure to investors (often guidance or a presentation)",
+    "8.01": "reported another event it considers important",
+}
+_SUBMISSIONS = {}
+
+
+def submissions(cik):
+    """The company's recent filings at the SEC, fetched once per run."""
+    if cik not in _SUBMISSIONS:
+        _SUBMISSIONS[cik] = json.loads(sec_get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json"))["filings"]["recent"]
+    return _SUBMISSIONS[cik]
+
+
+def doc_url(cik, accession, document):
+    return f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession.replace('-', '')}/{document}"
+
+
+def money(v):
+    return f"${v / 1e9:,.1f}bn" if v >= 1e9 else f"${v / 1e6:,.1f}m" if v >= 1e6 else f"${v:,.0f}"
+
+
+ROLES = {"chief executive officer": "CEO", "chief financial officer": "CFO", "chief operating officer": "COO",
+         "chairman": "Chair", "president": "President"}
+
+
+def insider_trade(cik, accession, document):
+    """One Form 4 about this company: (who, role, bought $, sold $, under a pre-set plan).
+    Only open-market buys (P) and sales (S) count; grants, option exercises and tax withholding do not.
+    None when the filing is about a different company (a holding can itself be an insider elsewhere)."""
+    raw = document.split("/")[-1]  # the SEC renders xslF345X06/x.xml as a page; the data is x.xml
+    try:
+        x = sec_get(doc_url(cik, accession, raw))
+    except RuntimeError:
+        return None
+    field = lambda tag, text: (re.search(rf"<{tag}>\s*(?:<value>)?\s*([^<]*)", text) or [None, ""])[1].strip()
+    if int(field("issuerCik", x) or 0) != cik:
+        return None
+    who = field("rptOwnerName", x)
+    if " " in who:  # the SEC writes "Sweet Julie"; people say "Julie Sweet"
+        last, first = who.split(" ", 1)
+        who = f"{first} {last}"
+    if who.isupper():
+        who = who.title()
+    title = field("officerTitle", x)
+    role = ROLES.get(title.lower(), title) if title and "remarks" not in title.lower() else (
+        "director" if field("isDirector", x) in ("1", "true") else "officer" if field("isOfficer", x) in ("1", "true") else "")
+    bought = sold = 0.0
+    for t in re.findall(r"<nonDerivativeTransaction>(.*?)</nonDerivativeTransaction>", x, re.S):
+        try:
+            n, px = float(field("transactionShares", t) or 0), float(field("transactionPricePerShare", t) or 0)
+        except ValueError:
+            continue
+        code = field("transactionCode", t)
+        bought += n * px if code == "P" else 0
+        sold += n * px if code == "S" else 0
+    if not bought and not sold:
+        return None
+    return who, role, bought, sold, field("aff10b5One", x) in ("1", "true")
+
+
+def subject_is(cik, accession, holding_cik):
+    """True when a 13D is about the holding (and not the holding's own stake in another company)."""
+    try:
+        index = sec_get(doc_url(cik, accession, f"{accession}-index.html"))
+    except RuntimeError:
+        return False
+    block = re.search(r"\(Subject\).*?CIK.*?(\d{10})", index, re.S)
+    return bool(block) and int(block.group(1)) == holding_cik
+
+
+def check_filings(rows, state):
+    """Every new filing that matters, except results, which get their own message."""
+    out = []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RESULTS_LOOKBACK_DAYS)
+    for row in rows:
+        entry = companies().get(row["ticker"])
+        if not entry:
+            continue
+        cik, r, lines = entry[0], submissions(entry[0]), []
+        for i, form in enumerate(r["form"][:80]):
+            acc = r["accessionNumber"][i]
+            if acc in state["filings"]:
+                continue
+            if datetime.fromisoformat(r["acceptanceDateTime"][i].replace("Z", "+00:00")) < cutoff:
+                break  # newest first, so everything after this is older
+            items = [x.strip() for x in (r["items"][i] or "").split(",") if x.strip()]
+            url, when = doc_url(cik, acc, r["primaryDocument"][i]), nice_date(r["filingDate"][i])
+            line = None
+            if form in ("8-K", "8-K/A") and "2.02" not in items:
+                said = [ITEMS_8K[x] for x in items if x in ITEMS_8K]
+                if said:
+                    line = f"{when}: the company {'; '.join(said)} (8-K). {link(url, 'Read it')}"
+            elif form == "4":
+                trade = insider_trade(cik, acc, r["primaryDocument"][i])
+                if trade:
+                    who, role, bought, sold, plan = trade
+                    person = f"{who} ({role})" if role else who
+                    if bought:
+                        line = f"{when}: {esc(person)} <b>bought</b> {money(bought)} of stock on the open market. {link(url, 'Form 4')}"
+                    elif not plan:
+                        line = f"{when}: {esc(person)} sold {money(sold)} of stock, not under a pre-set plan. {link(url, 'Form 4')}"
+                    else:  # routine: added up in the Monday portfolio check
+                        state.setdefault("plan_sales", {}).setdefault(row["ticker"], 0)
+                        state["plan_sales"][row["ticker"]] += sold
+            elif form in ("10-Q", "10-K", "20-F", "40-F"):
+                kind = "quarterly report" if form == "10-Q" else "annual report"
+                line = f"{when}: filed its {kind} ({form}). {link(url, 'Read it')}"
+            elif form.startswith(("SC 13D", "SCHEDULE 13D")) and subject_is(cik, acc, cik):
+                line = f"{when}: an investor filed or updated an activist-size stake (13D). {link(url, 'Read it')}"
+            if line:
+                lines.append("• " + line)
+            if not (form in ("8-K", "8-K/A") and "2.02" in items):
+                state["filings"].append(acc)  # results are marked by the results check
+        if lines:
+            out.append(f"<b>{esc(name_of(row['ticker']))}</b>\n" + "\n".join(lines))
+    return out
 
 
 # ----------------------------------------------------------------------------- 2. price
@@ -655,6 +793,93 @@ def theme_headlines(state):
     return out
 
 
+# ----------------------------------------------------------------------------- the Monday portfolio check
+
+def results_this_week(tickers):
+    """{ticker: 'Tue 27 Oct, before the open'} from Nasdaq's free earnings calendar, next five weekdays."""
+    d, days = datetime.now(timezone.utc).date(), []
+    while len(days) < 5:
+        if d.weekday() < 5:
+            days.append(d)
+        d += timedelta(days=1)
+    found = {}
+    for d in days:
+        try:
+            data = json.loads(fetch(f"https://api.nasdaq.com/api/calendar/earnings?date={d.isoformat()}",
+                                    {"User-Agent": BROWSERS[0], "Accept": "application/json"}))
+        except Exception:
+            continue
+        for row in (data.get("data") or {}).get("rows") or []:
+            if row.get("symbol") in tickers:
+                when = {"time-pre-market": "before the open", "time-after-hours": "after the close"}.get(row.get("time"), "")
+                found[row["symbol"]] = f"{d:%a} {d.day} {d:%b}" + (f", {when}" if when else "")
+    return found
+
+
+def weights(rows):
+    """{ticker: share of the portfolio}: broker values, else shares x price from your list, else equal."""
+    values = {}
+    for r in rows:
+        v = float(r.get("value") or 0)
+        if not v and (r.get("shares") or "").strip():
+            series = yahoo(r.get("yahoo") or r["ticker"], "3mo")
+            v = float(r["shares"]) * series[-1][1] if series else 0
+        if v:
+            values[r["ticker"]] = v
+    if values:
+        total = sum(values.values())
+        return {t: v / total for t, v in values.items()}, True
+    held = [r["ticker"] for r in rows]
+    return {t: 1 / len(held) for t in held}, False
+
+
+def portfolio_week(rows, state):
+    """Monday morning: the portfolio as a whole. Facts about the book, never instructions."""
+    w, real = weights(rows)
+    held = [r for r in rows if r["ticker"] in w]
+    lines = [f"🧭 <b>Your portfolio this week, {nice_date(datetime.now(timezone.utc).date().isoformat())}</b>"]
+    if not real:
+        lines.append("<i>Weights are equal because your list has no shares column and no broker is connected.</i>")
+
+    top = sorted(w.items(), key=lambda kv: -kv[1])[:5]
+    lines += ["", "<b>Largest positions</b>"] + [f"{esc(name_of(t))}: {v * 100:.1f}%" for t, v in top]
+
+    moves = []
+    for r in held:
+        series = yahoo(r.get("yahoo") or r["ticker"], "3mo")
+        if len(series) >= 6:
+            moves.append((r["ticker"], pct(series[-1][1], series[-6][1])))
+    if moves:
+        book = sum(w[t] * m for t, m in moves) / sum(w[t] for t, _ in moves)
+        best, worst = max(moves, key=lambda m: m[1]), min(moves, key=lambda m: m[1])
+        lines += ["", "<b>Last five trading days</b>",
+                  f"The portfolio {'rose' if book >= 0 else 'fell'} {abs(book):.1f}%. "
+                  f"Best: {esc(best[0])} {best[1]:+.1f}%. Worst: {esc(worst[0])} {worst[1]:+.1f}%."]
+
+    book_map, labels = exposure_map(held), {k: v["label"] for k, v in load_commodities().items()}
+    rows_out = []
+    for cid, who in book_map.items():
+        cost = sum(w[t] for t, side in who if side == "cost")
+        rev = sum(w[t] for t, side in who if side == "revenue")
+        rows_out.append((cost + rev, labels.get(cid, cid), cost, rev))
+    if rows_out:
+        lines += ["", "<b>What the portfolio depends on</b>"]
+        for _, label, cost, rev in sorted(rows_out, reverse=True)[:6]:
+            parts = ([f"{rev * 100:.0f}% of the portfolio has revenue tied to it"] if rev else []) + \
+                    ([f"{cost * 100:.0f}% has costs tied to it"] if cost else [])
+            lines.append(f"{esc(label)}: {'; '.join(parts)}.")
+
+    due = results_this_week({r["ticker"] for r in held})
+    if due:
+        lines += ["", "<b>Reporting results in the next five trading days</b>"] + [f"{esc(name_of(t))}: {when}" for t, when in due.items()]
+
+    sales = state.pop("plan_sales", {})
+    if sales:
+        lines += ["", "<b>Insider sales under pre-set plans since last Monday</b>"] + \
+                 [f"{esc(name_of(t))}: {money(v)}" for t, v in sorted(sales.items(), key=lambda kv: -kv[1])]
+    return "\n".join(lines)
+
+
 # ----------------------------------------------------------------------------- 10-K helper
 
 EXPOSURE_WORDS = {
@@ -772,7 +997,12 @@ def main(argv):
 
     now = datetime.now(timezone.utc)
     morning = "--morning" in argv or first_today(state, "morning")  # the first run of the day
-    sections = [("📈 Big moves in your holdings", check_prices(rows, state)),
+    monday = now.date() - timedelta(days=now.weekday())
+    if "--week" in argv or (morning and state["fired"].get("week") != monday.isoformat()):
+        state["fired"]["week"] = monday.isoformat()  # the first morning of each week
+        telegram(portfolio_week(rows, state), dry_run)
+    sections = [("🗂 New filings", check_filings(rows, state)),
+                ("📈 Big moves in your holdings", check_prices(rows, state)),
                 ("🛢 What your portfolio depends on", check_exposures(rows, state)),
                 ("🏦 Rates and markets", check_macro(state))]
     if morning:
