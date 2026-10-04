@@ -340,7 +340,7 @@ def page_text(raw_html):
 
 
 NUMBER = re.compile(r"\(?-?\$?\s?\d[\d,]*(?:\.\d+)?\)?\s?(?:%|percent|million|billion|thousand)?")
-SENTENCE_END = re.compile(r"[.;]\s+(?=[A-Z•])|•\s")  # "U.S. dollars" is not the end of a sentence
+SENTENCE_END = re.compile(r"[.;]\s+(?=[A-Z•◦])|[•◦]\s|\so\s(?=[A-Z])")  # "U.S. dollars" is not the end of a sentence; •, ◦ and "o" are bullets
 
 
 def to_float(token):
@@ -395,6 +395,41 @@ def ask_model(text, look_for):
     return value, as_written, quote
 
 
+HIGHLIGHTS = [  # what a holder reads first in a results release; the figure must follow the word closely
+    ("Revenue", re.compile(r"\b(revenues?|net sales|total sales)\b(?:(?!guidance|outlook)[^.$%]){0,60}?(\$\s?\d|\d\s?(%|percent))", re.I)),
+    ("Earnings per share", re.compile(r"\b(EPS|earnings per (diluted )?share)\b(?:(?!guidance|outlook)[^.$]){0,40}?\$\s?\d", re.I)),
+    ("Outlook", re.compile(r"\b(expects?|outlook|guidance)\b[^.]{0,80}?(\$\s?\d|\d\s?(%|percent))", re.I)),
+]
+CLAUSE_START = re.compile(r"(?<![\w-])(For|In|The|Our|Total|Revenues?|Net|Diluted|GAAP|Non-GAAP|Adjusted|Company|Full|Fourth|Third|Second|First)\b")
+
+
+def highlights(text):
+    """[(label, quote)]: the first sentence in the release where revenue, earnings per share and the
+    outlook each come with a figure. Quoted word for word, so nothing is computed or reworded; a
+    release laid out only as tables gives fewer lines, and the message says so."""
+    head = text[:len(text) // 2]  # the narrative sits before the financial tables
+    sentences, start = [], 0
+    for m in SENTENCE_END.finditer(head):
+        sentences.append(head[start:m.start() + 1].strip(" •◦o"))
+        start = m.end()
+    out, used = [], set()
+    for label, pattern in HIGHLIGHTS:
+        for sent in sentences:
+            hit = pattern.search(sent)
+            if (not hit or sent in used or len(re.findall(r"\d[\d,.]*", sent)) > 12
+                    or re.search(r"forward-looking|safe harbor|“|\"", sent)):
+                continue
+            quote = sent
+            if hit.start() > 50:  # a run-on line: start at the clause that holds the figure
+                starts = [m.start() for m in CLAUSE_START.finditer(sent, 0, hit.start() + 1)]
+                quote = sent[starts[-1]:] if starts else sent[hit.start():]
+            if 30 <= len(quote) <= 320:
+                out.append((label, quote))
+                used.add(sent)
+                break
+    return out
+
+
 TESTS = [("at least", lambda v, bar: v >= bar), ("at most", lambda v, bar: v <= bar),
          ("above", lambda v, bar: v > bar), ("below", lambda v, bar: v < bar)]
 
@@ -413,6 +448,7 @@ def results_message(row, filing, url, text, replay):
     lines = [head, f"Filed with the SEC on {nice_date(filing['date'])}."
              + (" <i>(A replay of a past filing.)</i>" if replay else ""), ""]
     look_for, test = (row.get("look_for") or "").strip(), (row.get("test") or "").strip()
+    shown = None
     if look_for:
         value, as_written, quote = find_number(text, look_for)
         how = ""
@@ -425,6 +461,13 @@ def results_message(row, filing, url, text, replay):
             verdict = judge(value, test)
             lines.append(f"<b>{esc(as_written)}</b>" + (f": {verdict} ({esc(test)})." if verdict else ".") + how)
             lines.append(f"<i>\"{esc(quote)}\"</i>")
+            lines.append("")
+            shown = quote
+    found = [(label, q) for label, q in highlights(text) if q != shown]  # never quote the same line twice
+    if found:
+        lines += ["<b>From the release</b>"] + [f"• <b>{label}:</b> <i>\"{esc(sent)}\"</i>" for label, sent in found]
+    elif not look_for:
+        lines.append("The release is laid out as tables, so open it for the figures.")
     if (row.get("note") or "").strip():
         lines += ["", f"Your note: {esc(row['note'].strip())}"]
     lines += ["", link(url, "Read the release")]

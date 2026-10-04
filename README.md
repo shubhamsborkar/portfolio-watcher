@@ -10,7 +10,7 @@ Your holdings are connected to each other through what they buy, what they sell 
 
 After that, each check sends one message, in this order of priority, and only the parts that have something in them:
 
-1. **Results.** When a company on your list files its results with the SEC (a form 8-K with item 2.02), the program opens the press release, finds the number you wrote down for that company, and tells you whether the release cleared your line, with the sentence it read and the link. Each result gets its own message.
+1. **Results.** When a company on your list files its results with the SEC (a form 8-K with item 2.02), the program opens the press release and quotes its own sentences on revenue, earnings per share and the outlook, word for word, with a link to the release. Each result gets its own message. If you like to write a test before results, you can also give it one number to check, and it tells you whether the release cleared your line.
 2. **New filings.** Everything else a holder should hear about from the SEC, in plain words with a link to the filing: an insider buying shares on the open market, an insider selling outside a pre-set trading plan, a material 8-K (a major agreement signed or ended, an acquisition, new debt, restructuring costs, a write-down, a senior officer joining or leaving, a change of auditor, earlier accounts that can no longer be relied on), the quarterly and annual reports, and an investor filing an activist-size stake (13D). Routine insider sales under pre-set plans are added up and shown once a week instead.
 3. **Big moves in your holdings.** A holding that moved 5% or more in a day, with its move over the past month for context.
 4. **What your portfolio depends on.** A commodity or currency your holdings are tied to breaking out of its range: a new three-month high or low, with the range it had been in, and the names in your portfolio tied to it. A swing of a few percent inside a range is noise, so it never fires. Crude can go from 90 to 110 and back inside a month without telling you anything about a holding that buys fuel.
@@ -55,13 +55,13 @@ Look for `"chat":{"id":` followed by a number. That number is your chat ID.
 
 ## Filling in the watchlist
 
-Each row is one holding. Only `ticker` is needed; every other column is optional.
+Each row is one holding. Only `ticker` is needed; every other column is optional. Most people fill in `ticker` and `shares` and stop there.
 
 | Column | What to put in | Example |
 |---|---|---|
 | `ticker` | the ticker | `UBER` |
-| `look_for` | the words that sit right before the number you care about in the company's results release | `Gross Bookings grew ... to` |
-| `test` | your line for that number, starting with at least, at most, above or below | `at least 45` |
+| `look_for` | optional, for people who write a test before results: the words that sit right before the number you care about in the results release | `Gross Bookings grew ... to` |
+| `test` | optional: your line for that number, starting with at least, at most, above or below | `at least 45` |
 | `exposures` | what the company buys (cost) or sells (revenue), separated by `;` | `wti:cost` |
 | `keywords` | words that put matching stories first in the morning headline, separated by `;` | `robotaxi` |
 | `yahoo` | only for a listing outside the US: Yahoo's symbol | `RELIANCE.NS` |
@@ -70,7 +70,7 @@ Each row is one holding. Only `ticker` is needed; every other column is optional
 
 A few things that make it work well:
 
-- **Copy `look_for` from the company's last release.** Apple writes "quarterly revenue of", Microsoft writes "Revenue was". Three dots stand for a few words in between. Write the `test` number in the same units the company uses: if it reports in millions, your line is in millions.
+- **If you write a results line, copy `look_for` from the company's last release.** Apple writes "quarterly revenue of", Microsoft writes "Revenue was". Three dots stand for a few words in between. Write the `test` number in the same units the company uses: if it reports in millions, your line is in millions.
 - **The exposure names** come from `data/commodities.json`. The common ones: `wti` and `brent` (crude), `natgas_us`, `gasoline`, `copper`, `aluminium`, `gold`, `silver`, `uranium`, `wheat`, `corn`, `coffee`, `cocoa`, `cotton`, `eurusd`, `gbpusd`, `usdjpy`, `usdcny`, `usdinr`.
 - **Not sure what a company is exposed to?** Its annual report says. On your own computer, `python watch.py --exposures UBER` lists every commodity and currency word in Uber's latest annual report with the sentence around it. The program only counts words; you decide which ones are real. In Uber's report the word "sugar" turns up twice, and both times it is the chairman, Ronald Sugar. Or give the annual report to Claude or ChatGPT once and ask which commodities and currencies are a real cost or revenue for the business.
 - **Put your main holdings at the top.** The morning headlines come from the top of the list down.
@@ -131,7 +131,7 @@ The watcher only talks; it does not answer. If you want to reply to an alert in 
 
 ## Limits
 
-- Results reading works on most US releases. When the code cannot find your words, the message says so and gives you the link.
+- The results quotes work on most US releases. A release laid out only as tables gives fewer lines, and a company that leads with its own measure (PTC leads with ARR) may show only the outlook; the link is always there. When the code cannot find your own words, the message says so.
 - Companies listed outside the US do not file with the SEC, so they get the price, exposure and headline checks but no results check.
 - Some commodities have no free daily price. Uranium and a few others come from a monthly series that runs two to three months behind, and the message says so. The ones with only a paid source are not watched.
 - Yahoo Finance's price data is free but unofficial, and it can change without notice.
