@@ -1,0 +1,29 @@
+name: Portfolio watcher
+
+on:
+  schedule:
+    - cron: "7 * * * *"   # every hour at seven minutes past (GitHub runs late on the hour itself)
+  workflow_dispatch:       # adds a "Run workflow" button so you can test it by hand
+
+permissions:
+  contents: write          # lets the run save state.json, so you never get the same alert twice
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check filings, prices, commodities, macro and news
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SEC_EMAIL: ${{ secrets.SEC_EMAIL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: python3 watch.py
+      - name: Remember what was sent
+        run: |
+          git config user.name "earnings-watcher"
+          git config user.email "earnings-watcher@users.noreply.github.com"
+          git add state.json
+          git diff --cached --quiet || (git commit -m "Remember what was sent" && git push)
