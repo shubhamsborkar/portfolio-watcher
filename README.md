@@ -143,6 +143,7 @@ The watcher only talks; it does not answer. If you want to reply to an alert in 
 
 ## Limits
 
+- A headline is matched on the first word of the company's name, so a story about Hilton Worldwide could appear under Hilton Grand Vacations; the link always shows which it is.
 - The results quotes work on most US releases. A release laid out only as tables gives fewer lines, and a company that leads with its own measure (PTC leads with ARR) may show only the outlook; the link is always there. When the code cannot find your own words, the message says so.
 - Companies listed outside the US do not file with the SEC, so they get the price, exposure and headline checks but no results check.
 - Some commodities have no free daily price (uranium, lithium and a few others). They appear on the map, marked as not watched, because only a daily price can break out of a range.
