@@ -2,7 +2,11 @@ name: Portfolio watcher
 
 on:
   schedule:
-    - cron: "7 * * * *"   # every hour at seven minutes past (GitHub runs late on the hour itself)
+    # Twice on weekdays, set for the US market (times are in UTC):
+    # 12:30 UTC is before the New York open, 21:30 UTC is after the close, summer and winter.
+    # Other markets: see "Set it for your market" in the README.
+    - cron: "30 12 * * 1-5"
+    - cron: "30 21 * * 1-5"
   workflow_dispatch:       # adds a "Run workflow" button so you can test it by hand
 
 permissions:

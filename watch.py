@@ -1,25 +1,23 @@
 """
 Portfolio watcher.
 
-Every hour it checks, for every holding on your watchlist:
+Twice a day on weekdays (before the market opens and after it closes) it checks every
+holding on your watchlist and sends you ONE short message, and only when something matters:
 
-  1. Results     a new results filing at the SEC (form 8-K, item 2.02). It opens the
-                 press release, finds the number you wrote down, and checks it against
-                 your line.
-  2. Price       a big daily move in the stock.
-  3. Exposures   the commodities and currencies each holding buys or sells (crude,
-                 copper, gold, the euro ...): a big move, and which way it cuts.
-  4. Macro       a big move in rates, the VIX, credit spreads or the dollar.
+  1. Results     a new results filing at the SEC (form 8-K, item 2.02). It opens the press
+                 release, finds the number you wrote down, and checks it against your line.
+  2. Big moves   a holding that moved 5% or more in a day.
+  3. What your   a commodity, currency or rate your holdings depend on breaking out of its
+     portfolio   range: a new three-month high or low, with the range for context and the
+     depends on  names in your portfolio that buy it, sell it or borrow against it.
+  4. Morning     the day's high-impact US releases (CPI, jobs, the Fed) and the top headline
+                 for your first few holdings.
 
-Once a day, in the morning run, it also sends:
+A quiet day sends nothing. The first run sends a map of how your holdings connect.
 
-  5. Calendar    today's high-impact US releases (CPI, jobs, the Fed).
-  6. Headlines   the latest headlines for the words you chose, at most two per holding.
-
-Every alert fires once a day at most. No AI runs in the hourly check: it is plain code
-reading free public data. If a press release cannot be read by code and you have added an
-OpenRouter key, a cheap model is asked for that one sentence, and the program keeps it
-only if the sentence is really in the release.
+No AI runs in the check: it is plain code reading free public data. If a press release
+cannot be read by code and you have added an OpenRouter key, a cheap model is asked for
+that one sentence, and the program keeps it only if the sentence is really in the release.
 
 Settings (GitHub repository secrets, or environment variables on your computer):
   TELEGRAM_TOKEN      the token @BotFather gave you
@@ -29,9 +27,10 @@ Settings (GitHub repository secrets, or environment variables on your computer):
   OPENROUTER_MODEL    optional, default openai/gpt-6-luna
 
 Run it by hand:
-  python watch.py                    the hourly check: message only what is new
-  python watch.py --dry-run          print the messages instead of sending them
-  python watch.py --digest           add the morning calendar and headlines now
+  python watch.py                    the check: message only what is new
+  python watch.py --dry-run          print the message instead of sending it
+  python watch.py --morning          include the calendar and headlines now
+  python watch.py --map              send the map of how your holdings connect
   python watch.py --replay ACN       re-read ACN's latest results and message them again
   python watch.py --exposures UBER   list the commodity and currency words in UBER's annual report
   python watch.py --chat-id          print the chat ID of whoever last messaged your bot
@@ -58,39 +57,34 @@ STATE = os.environ.get("STATE") or os.path.join(HERE, "state.json")
 COMMODITIES = os.path.join(HERE, "data", "commodities.json")
 
 # ----------------------------------------------------------------------------- your thresholds
-# Change any number here. Each alert fires once a day at most.
+# Change any number here.
 
 STOCK_DAY_MOVE = 5.0          # % a holding moves in a day
-COMMODITY_DAY_MOVE = 5.0      # % a commodity moves in a day
-COMMODITY_MONTH_MOVE = 20.0   # % a commodity moves in a month
-CURRENCY_DAY_MOVE = 1.0       # % a currency pair moves in a day (currencies move far less)
+RANGE_DAYS = 63               # a breakout means a new high or low over this many trading days (about three months)
 NEAR_FIVE_YEAR_HIGH = 2.0     # a commodity within this % of its five-year high
-DIGEST_HOUR_UTC = 11          # the morning run (11:00 UTC is 7:00 in New York)
+QUIET_DAYS = 5                # once an item has fired, it stays quiet this many days
 RESULTS_LOOKBACK_DAYS = 3     # a filing older than this is never messaged
-HEADLINES_PER_HOLDING = 2
-HEADLINES_IN_TOTAL = 10
+HEADLINES_PER_HOLDING = 1
+HEADLINES_IN_TOTAL = 5        # taken from the top of your watchlist down, so put your main holdings first
 
-# Macro series from FRED (the St. Louis Fed's free database). "change" fires when the last
-# reading moved at least this much against the reading `days` rows earlier; "above" fires
-# when the reading is above the number. The last field is the one line on why it matters.
+# Rates and markets from FRED (the St. Louis Fed's free database): a new three-month high or
+# low fires, and the VIX fires when it crosses above 25. The last field says why it matters.
 MACRO = [
-    ("DGS10", "10-year Treasury yield", "change", 0.15, 1, "points",
-     "Long-term borrowing costs. A sharp rise usually weighs most on companies valued on profits far in the future."),
-    ("DGS2", "2-year Treasury yield", "change", 0.15, 1, "points",
+    ("DGS10", "10-year Treasury yield", "%",
+     "Long-term borrowing costs. A higher yield usually weighs most on companies valued on profits far in the future."),
+    ("DGS2", "2-year Treasury yield", "%",
      "This yield moves with what the market expects the Fed to do next."),
-    ("T10Y2Y", "Gap between the 10-year and 2-year yields", "change", 0.15, 1, "points",
-     "A big swing usually means the market has changed its view on growth."),
-    ("VIXCLS", "VIX", "above", 25, 0, "",
-     "The market's expected swing in the S&P 500 over the next month. Above 25 is a nervous market."),
-    ("BAMLH0A0HYM2", "High-yield credit spread", "change", 0.40, 5, "points",
-     "Wider spreads mean lenders want more to hold riskier company debt."),
-    ("DTWEXBGS", "US dollar index", "change_pct", 1.0, 1, "%",
+    ("BAMLH0A0HYM2", "High-yield credit spread", "%",
+     "How much extra lenders want to hold riskier company debt. Wider means more caution."),
+    ("DTWEXBGS", "US dollar index", "",
      "A stronger dollar shrinks what US companies earn abroad once it is converted back."),
+    ("VIXCLS", "VIX", "",
+     "The market's expected swing in the S&P 500 over the next month. Above 25 is a nervous market."),
 ]
 
 # Sites that publish machine-made stock pages rather than news. Add any you do not want.
 NOISY_SOURCES = ["Stock Traders Daily", "IndexBox", "MEXC", "TradingView", "MarketBeat", "ChartMill",
-                 "Yahoo Finance Singapore", "Yahoo! Finance Canada", "GuruFocus", "Simply Wall St", "AD HOC NEWS"]
+                 "Yahoo Finance Singapore", "Yahoo! Finance Canada", "GuruFocus", "Simply Wall St", "simplywall", "AD HOC NEWS"]
 
 BROWSERS = [  # Yahoo answers ordinary browsers; when one is throttled the next is tried
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36",
@@ -196,7 +190,7 @@ def load_state():
     s.setdefault("filings", [])
     s.setdefault("fired", {})
     s.setdefault("headlines", [])
-    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).date().isoformat()
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
     s["fired"] = {k: v for k, v in s["fired"].items() if v >= week_ago}
     s["today"] = datetime.now(timezone.utc).date().isoformat()
     return s
@@ -213,6 +207,15 @@ def save_state(s):
 def first_today(state, key):
     """True the first time an alert fires today; False after that."""
     if state["fired"].get(key) == state["today"]:
+        return False
+    state["fired"][key] = state["today"]
+    return True
+
+
+def quiet_since(state, key):
+    """True if this item has not fired in the last QUIET_DAYS days; marks it as fired."""
+    last = state["fired"].get(key)
+    if last and (date.fromisoformat(state["today"]) - date.fromisoformat(last)).days < QUIET_DAYS:
         return False
     state["fired"][key] = state["today"]
     return True
@@ -237,10 +240,13 @@ def name_of(ticker):
     entry = companies().get(ticker)
     if not entry:
         return ticker
-    words = entry[1].title() if entry[1].isupper() else entry[1]
-    words = re.sub(r"\s*/.*$|\s+A[/ ]S$", "", words.strip())
-    words = re.sub(r",?\s+(Inc|Corp|Corporation|Ltd|Limited|plc|Plc|N\.V|S\.A|Co)\.?$", "", words.strip())
-    return f"{words} ({ticker})"
+    raw = re.sub(r"\s*/.*$|\s+A[/ ]S$", "", entry[1].strip())
+    raw = re.sub(r"(?i),?\s+(inc|corp|corporation|ltd|limited|plc|n\.v|s\.a|co|holdings|group holding|athletica inc)\.?$", "", raw)
+    raw = re.sub(r"(?i),?\s+(inc|corp|athletica)\.?$", "", raw)
+    if raw.isupper():  # PTC stays PTC; UBER TECHNOLOGIES becomes Uber Technologies
+        raw = " ".join(w if len(w) <= 3 else w.title() for w in raw.split())
+    words = raw
+    return ticker if words.upper() == ticker else f"{words} ({ticker})"
 
 
 # ----------------------------------------------------------------------------- 1. results
@@ -407,87 +413,90 @@ def check_prices(rows, state):
     return out
 
 
-# ----------------------------------------------------------------------------- 3. exposures
+# ----------------------------------------------------------------------------- 3. what the portfolio depends on
 
 def load_commodities():
     with open(COMMODITIES) as fh:
         return {c["id"]: c for c in json.load(fh)["commodities"]}
 
 
-def commodity_read(c):
-    """(level, day %, month %, % off the five-year high, monthly note, date) for one item."""
-    src = c.get("sources", {})
-    if src.get("yahoo"):
-        s = yahoo(src["yahoo"], "5y")
-        if len(s) >= 22:
-            last, prev, month = s[-1][1], s[-2][1], s[-22][1]
-            return last, pct(last, prev), pct(last, month), pct(last, max(v for _, v in s)), "", s[-1][0]
-    if src.get("fred"):
-        s = fred(src["fred"])  # monthly, two to three months behind
-        if len(s) >= 2:
-            return (s[-1][1], None, pct(s[-1][1], s[-2][1]), None,
-                    f" This is a monthly price; the latest is for {nice_date(s[-1][0])}.", s[-1][0])
+def breakout(series, digits=2, unit=""):
+    """A new high or low over the last RANGE_DAYS readings, with the range before it."""
+    if len(series) <= RANGE_DAYS:
+        return None
+    last_day, last = series[-1]
+    before = [v for _, v in series[-RANGE_DAYS - 1:-1]]
+    lo, hi, start = min(before), max(before), series[-RANGE_DAYS - 1][0]
+    fmt = lambda v: f"{v:,.{digits}f}{unit}"
+    span = f"it had ranged from {fmt(lo)} to {fmt(hi)} since {nice_date(start)}"
+    if last > hi:
+        return "high", f"closed at its highest in three months, {fmt(last)}, on {nice_date(last_day)}; {span}."
+    if last < lo:
+        return "low", f"closed at its lowest in three months, {fmt(last)}, on {nice_date(last_day)}; {span}."
     return None
 
 
-def check_exposures(rows, state):
-    book = load_commodities()
+def who_line(who, prefix="Your names with ", short=False):
+    show = (lambda t: t) if short else name_of
+    costs = [show(t) for t, side in who if side == "cost"]
+    revenue = [show(t) for t, side in who if side == "revenue"]
+    parts = []
+    if costs:
+        parts.append("costs tied to it: " + ", ".join(costs))
+    if revenue:
+        parts.append("revenue tied to it: " + ", ".join(revenue))
+    return prefix + "; ".join(parts) + "."
+
+
+def exposure_map(rows):
     held = {}
     for row in rows:
         for e in row["exposures"]:
             cid, _, side = e.partition(":")
             held.setdefault(cid.strip(), []).append((row["ticker"], side.strip().lower()))
-    out = []
-    for cid, who in sorted(held.items()):
+    return held
+
+
+def check_exposures(rows, state):
+    book, out = load_commodities(), []
+    for cid, who in sorted(exposure_map(rows).items()):
         c = book.get(cid)
         if not c:
             print(f"\"{cid}\" is not in data/commodities.json; check the spelling.")
             continue
-        r = commodity_read(c)
-        if not r:
-            continue
-        level, day, month, off_high, monthly, when = r
+        src = c.get("sources", {})
+        series = yahoo(src["yahoo"], "5y") if src.get("yahoo") else []
+        if not series:
+            continue  # only daily prices can break out; monthly series are too slow for this
         is_fx = c.get("group") == "Currency"
-        hits = []
-        if day is not None and abs(day) >= (CURRENCY_DAY_MOVE if is_fx else COMMODITY_DAY_MOVE):
-            hits.append(("day", day, f"{'rose' if day > 0 else 'fell'} {abs(day):.1f}% on {nice_date(when)}"))
-        if month is not None and abs(month) >= COMMODITY_MONTH_MOVE:
-            hits.append(("month", month, f"is {'up' if month > 0 else 'down'} {abs(month):.1f}% in a month"))
-        if off_high is not None and not is_fx and off_high >= -NEAR_FIVE_YEAR_HIGH:
-            hits.append(("peak", 1, "is at or near its highest price in five years"))
-        for kind, move, words in hits:
-            if not first_today(state, f"{kind}|{cid}|{when}"):
-                continue
-            lines = [f"<b>{esc(c['label'])}</b> {words}, to {level:,.2f} {esc(c.get('unit', ''))}.{monthly}"]
-            for t, side in who:
-                helps = (side == "revenue") == (move > 0)  # a rise helps a seller and squeezes a buyer
-                role = "sells it" if side == "revenue" else "buys it"
-                lines.append(f"• {esc(name_of(t))} {role}, so this {'helps' if helps else 'hurts'}.")
-            out.append("\n".join(lines))
+        hit = breakout(series, 4 if is_fx else 2, "")
+        unit = "" if is_fx else f" {c.get('unit', '')}"
+        if hit and quiet_since(state, f"range|{cid}"):
+            kind, words = hit
+            out.append(f"<b>{esc(c['label'])}</b>{esc(unit) and ' (' + esc(unit.strip()) + ')'} {esc(words)}\n{esc(who_line(who))}")
+        elif not is_fx:
+            top = max(v for _, v in series)
+            if pct(series[-1][1], top) >= -NEAR_FIVE_YEAR_HIGH and quiet_since(state, f"peak|{cid}"):
+                out.append(f"<b>{esc(c['label'])}</b> is within {NEAR_FIVE_YEAR_HIGH:g}% of its highest price in five years, "
+                           f"at {series[-1][1]:,.2f}{esc(unit)}.\n{esc(who_line(who))}")
     return out
 
 
-# ----------------------------------------------------------------------------- 4. macro
+# ----------------------------------------------------------------------------- 4. rates and markets
 
 def check_macro(state):
     out = []
-    for sid, label, rule, bar, days, unit, why in MACRO:
+    for sid, label, unit, why in MACRO:
         s = fred(sid)
-        if len(s) <= days:
+        if len(s) < 2:
             continue
-        last, when = s[-1][1], s[-1][0]
-        if rule == "above":
-            hit, words = last > bar, f"is at {last:.2f}, above {bar}"
-        else:
-            then = s[-1 - days][1]
-            change = pct(last, then) if rule == "change_pct" else last - then
-            span = "in a day" if days == 1 else f"over {days} trading days"
-            move = "rose" if change > 0 else "fell"
-            size = f"{abs(change):.2f}%" if unit == "%" else f"{abs(change):.2f} {unit}"
-            level = f"{last:.2f}%" if unit == "points" else f"{last:.2f}"
-            hit, words = abs(change) >= bar, f"{move} {size} {span}, to {level}"
-        if hit and first_today(state, f"macro|{sid}|{when}"):
-            out.append(f"<b>{esc(label)}</b> {words} (latest reading {nice_date(when)}).\n{esc(why)}")
+        if sid == "VIXCLS":
+            if s[-1][1] > 25 >= s[-2][1] and quiet_since(state, "macro|VIXCLS"):
+                out.append(f"<b>VIX</b> crossed above 25, to {s[-1][1]:.2f}, on {nice_date(s[-1][0])}.\n{esc(why)}")
+            continue
+        hit = breakout(s, 2, unit)
+        if hit and quiet_since(state, f"macro|{sid}"):
+            out.append(f"<b>{esc(label)}</b> {esc(hit[1])}\n{esc(why)}")
     return out
 
 
@@ -589,26 +598,19 @@ def telegram(text, dry_run):
     token, chat = os.environ.get("TELEGRAM_TOKEN", "").strip(), os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat:
         sys.exit("TELEGRAM_TOKEN or TELEGRAM_CHAT_ID is not set.")
-    body = json.dumps({"chat_id": chat, "text": text[:4000], "parse_mode": "HTML",
-                       "disable_web_page_preview": True}).encode()
-    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body,
-                                 headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req, timeout=30).read()
-
-
-def send_section(title, blocks, dry_run, footer=""):
-    """One message per section; a long section is split between blocks, never mid-block."""
-    if not blocks:
-        return
-    parts, current = [], f"<b>{title}</b>"
-    for b in blocks:
-        if len(current) + len(b) + 2 > 3800:
+    parts, current = [], ""
+    for block in text.split("\n\n"):  # Telegram's limit is 4,096 characters; split between blocks
+        if current and len(current) + len(block) > 3800:
             parts.append(current)
-            current = f"<b>{title} (continued)</b>"
-        current += "\n\n" + b
-    parts.append(current + (f"\n\n<i>{footer}</i>" if footer else ""))
-    for p in parts:
-        telegram(p, dry_run)
+            current = ""
+        current = f"{current}\n\n{block}" if current else block
+    parts.append(current)
+    for part in parts:
+        body = json.dumps({"chat_id": chat, "text": part, "parse_mode": "HTML",
+                           "disable_web_page_preview": True}).encode()
+        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=body,
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=30).read()
 
 
 def print_chat_id():
@@ -621,6 +623,23 @@ def print_chat_id():
 
 
 # ----------------------------------------------------------------------------- the run
+
+def portfolio_map(rows):
+    """How the watchlist connects: each commodity, currency or rate, and the names tied to it."""
+    book = load_commodities()
+    lines = ["🌳 <b>How your portfolio connects</b>", ""]
+    held = exposure_map(rows)
+    for cid, who in sorted(held.items(), key=lambda kv: -len(kv[1])):
+        label = book.get(cid, {}).get("label", cid)
+        line = who_line(who, prefix="", short=True)
+        lines.append(f"<b>{esc(label)}</b>\n{esc(line[:1].upper() + line[1:])}")
+    alone = [r["ticker"] for r in rows if not r["exposures"]]
+    if alone:
+        lines += ["", f"No commodity or currency set yet: {esc(', '.join(alone))}."]
+    lines += ["", "Every holding also shares the same rates, credit spreads and dollar, which the "
+                  "watcher checks for all of them."]
+    return "\n".join(lines)
+
 
 def main(argv):
     dry_run = "--dry-run" in argv
@@ -638,31 +657,38 @@ def main(argv):
         for m in check_results(picked, state, replay=True):
             telegram(m, dry_run)
         return
+    if "--map" in argv:
+        return telegram(portfolio_map(rows), dry_run)
 
     if first_run:
         telegram(f"👋 <b>Your portfolio watcher is running.</b>\n\nIt is watching {len(rows)} "
-                 f"name{'s' if len(rows) != 1 else ''}: {esc(', '.join(r['ticker'] for r in rows))}.\n\n"
-                 f"It checks every hour and only writes when something moves. The morning note with "
-                 f"the day's calendar and headlines comes at 7:00 New York time.", dry_run)
+                 f"name{'s' if len(rows) != 1 else ''}. It checks before the market opens and after it "
+                 f"closes, and it only writes when something matters.", dry_run)
+        telegram(portfolio_map(rows), dry_run)
 
+    # results are the most important thing, so each one gets its own message
     for m in check_results(rows, state):
         telegram(m, dry_run)
-    send_section("📈 Big moves in your holdings", check_prices(rows, state), dry_run)
-    send_section("🛢 Commodities and currencies your holdings depend on", check_exposures(rows, state), dry_run)
-    send_section("🏦 Rates and markets", check_macro(state), dry_run,
-                 footer="Source: FRED, the St. Louis Fed's free database. Readings are one business day behind.")
 
     now = datetime.now(timezone.utc)
-    if "--digest" in argv or (now.hour == DIGEST_HOUR_UTC and first_today(state, "digest")):
+    morning = "--morning" in argv or first_today(state, "morning")  # the first run of the day
+    sections = [("📈 Big moves in your holdings", check_prices(rows, state)),
+                ("🛢 What your portfolio depends on", check_exposures(rows, state)),
+                ("🏦 Rates and markets", check_macro(state))]
+    if morning:
         cal = calendar_today()
-        send_section(f"🗓 Today, {nice_date(now.date().isoformat())}",
-                     cal or ["No major US economic releases today."], dry_run)
-        send_section("📰 Headlines on your holdings", headlines(rows, state), dry_run,
-                     footer="Matched on the words you chose for each holding. Tap a headline to read it.")
+        if cal:
+            sections.append((f"🗓 Today's US releases", cal))
+        sections.append(("📰 Top headlines", headlines(rows, state)))
+
+    body = "\n\n".join(f"<b>{title}</b>\n" + "\n\n".join(blocks) for title, blocks in sections if blocks)
+    if body:
+        telegram(f"<b>{'Morning' if morning else 'Evening'} note, {nice_date(now.date().isoformat())}</b>\n\n" + body, dry_run)
 
     if not dry_run:
         save_state(state)
-    print(f"Checked {len(rows)} name{'s' if len(rows) != 1 else ''} at {now:%Y-%m-%d %H:%M} UTC.")
+    print(f"Checked {len(rows)} name{'s' if len(rows) != 1 else ''} at {now:%Y-%m-%d %H:%M} UTC."
+          + ("" if body else " Nothing to report."))
 
 
 if __name__ == "__main__":
