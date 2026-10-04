@@ -9,8 +9,17 @@ on:
     - cron: "30 21 * * 1-5"
   workflow_dispatch:       # adds a "Run workflow" button so you can test it by hand
     inputs:
+      send:
+        description: "What to send now"
+        type: choice
+        default: "the normal check"
+        options:
+          - "the normal check"
+          - "the morning note (calendar and headlines included)"
+          - "the Monday portfolio check"
+          - "the map of how your holdings connect"
       replay:
-        description: "Optional: a ticker whose latest results to send you again, to see what a results message looks like (for example ACN)"
+        description: "Or a ticker whose latest results to send again, to see what a results message looks like (for example ACN)"
         required: false
         default: ""
 
@@ -33,7 +42,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # Optional: read your holdings from your broker. BROKER is one of alpaca, angel_one,
           # dhan, groww, ibkr_flex, longbridge, tastytrade, tradier, trading212; the README says
-          # which secrets each one needs. Leave BROKER unset to use watchlist.csv only.
+          # which secrets each one needs. Leave BROKER unset to use stocks.txt only.
           BROKER: ${{ secrets.BROKER }}
           ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
           ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
@@ -65,9 +74,16 @@ jobs:
           T212_KEY: ${{ secrets.T212_KEY }}
           T212_SECRET: ${{ secrets.T212_SECRET }}
           T212_DEMO: ${{ secrets.T212_DEMO }}
+          SEND: ${{ github.event.inputs.send }}
           REPLAY: ${{ github.event.inputs.replay }}
         run: |
-          if [ -n "$REPLAY" ]; then python3 watch.py --replay "$REPLAY"; else python3 watch.py; fi
+          case "$SEND" in
+            *morning*) FLAG="--morning" ;;
+            *Monday*)  FLAG="--week" ;;
+            *map*)     FLAG="--map" ;;
+            *)         FLAG="" ;;
+          esac
+          if [ -n "$REPLAY" ]; then python3 watch.py --replay "$REPLAY"; else python3 watch.py $FLAG; fi
       - name: Remember what was sent
         run: |
           git config user.name "earnings-watcher"

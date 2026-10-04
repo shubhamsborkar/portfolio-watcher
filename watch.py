@@ -125,9 +125,24 @@ def link(url, words):
 # ----------------------------------------------------------------------------- fetching
 
 def fetch(url, headers=None, timeout=30):
-    req = urllib.request.Request(url, headers=headers or {"User-Agent": BROWSERS[0]})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "replace")
+    headers = headers or {"User-Agent": BROWSERS[0]}
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", "replace")
+    except urllib.error.URLError as e:
+        if "CERTIFICATE_VERIFY_FAILED" not in str(e):
+            raise
+    # Python installed from python.org on a Mac ships without certificates until its
+    # "Install Certificates" step is run; curl on the same computer has them, so use it.
+    args = ["curl", "-s", "-f", "-L", "-m", str(timeout)]
+    for k, v in headers.items():
+        args += ["-H", f"{k}: {v}"]
+    r = subprocess.run(args + [url], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=timeout + 5)
+    if r.returncode != 0:
+        raise urllib.error.URLError(f"curl could not fetch {url} (exit {r.returncode})")
+    return r.stdout
 
 
 def sec_get(url):
@@ -895,8 +910,11 @@ def headlines(rows, state):
         if total >= HEADLINES_IN_TOTAL:
             break
         name = name_of(row["ticker"]).rsplit(" (", 1)[0]
-        first_word = next((w for w in re.split(r"[\s,]+", name) if len(w) >= 3), name)
-        named = lambda h: (first_word.lower() in h.lower() or re.search(rf"\b{re.escape(row['ticker'])}\b", h))
+        # the first two words of the name (Hilton Grand, S&P Global), so a story about Hilton
+        # Worldwide or an S&P rating does not pass as one about the holding; a one-word name is itself
+        words = [w for w in re.split(r"[\s,]+", name) if len(w) >= 2]
+        short = " ".join(words[:2]) if len(words) >= 2 else (words[0] if words else name)
+        named = lambda h: (short.lower() in h.lower() or re.search(rf"\b{re.escape(row['ticker'])}\b", h))
         fresh = lambda h, src: f"{h} - {src}" not in state["headlines"]
         candidates = [(h, src, u) for h, src, u, when in yahoo_news(row.get("yahoo") or row["ticker"])
                       if when >= recent and named(h) and fresh(h, src)]
@@ -971,12 +989,15 @@ def portfolio_week(rows, state):
     """Monday morning: the portfolio as a whole. Facts about the book, never instructions."""
     w, real = weights(rows)
     held = [r for r in rows if r["ticker"] in w]
+    n = len(held)
     lines = [f"🧭 <b>Your portfolio this week, {nice_date(datetime.now(timezone.utc).date().isoformat())}</b>"]
-    if not real:
-        lines.append("<i>Weights are equal because stocks.txt has no share counts and no broker is connected.</i>")
-
-    top = sorted(w.items(), key=lambda kv: -kv[1])[:5]
-    lines += ["", "<b>Largest positions</b>"] + [f"{esc(name_of(t))}: {v * 100:.1f}%" for t, v in top]
+    if real:
+        top = sorted(w.items(), key=lambda kv: -kv[1])[:5]
+        lines += ["", "<b>Largest positions</b>"] + [f"{esc(name_of(t))}: {v * 100:.1f}%" for t, v in top]
+    else:  # no sizes known: say so once, plainly, and never print a made-up percentage
+        lines += ["", f"<i>{n} names, each counted the same size, because stocks.txt has no share counts "
+                      f"and no broker is connected. Put the shares after each ticker (UBER 120) and this "
+                      f"check weights your book.</i>"]
 
     moves = []
     for r in held:
@@ -986,8 +1007,9 @@ def portfolio_week(rows, state):
     if moves:
         book = sum(w[t] * m for t, m in moves) / sum(w[t] for t, _ in moves)
         best, worst = max(moves, key=lambda m: m[1]), min(moves, key=lambda m: m[1])
+        what = "The portfolio" if real else "Your names, counted equally,"
         lines += ["", "<b>Last five trading days</b>",
-                  f"The portfolio {'rose' if book >= 0 else 'fell'} {abs(book):.1f}%. "
+                  f"{what} {'rose' if book >= 0 else 'fell'} {abs(book):.1f}%. "
                   f"Best: {esc(best[0])} {best[1]:+.1f}%. Worst: {esc(worst[0])} {worst[1]:+.1f}%."]
 
     book_map, labels = exposure_map(held), {k: v["label"] for k, v in load_commodities().items()}
@@ -999,8 +1021,13 @@ def portfolio_week(rows, state):
     if rows_out:
         lines += ["", "<b>What the portfolio depends on</b>"]
         for _, label, cost, rev in sorted(rows_out, reverse=True)[:6]:
-            parts = ([f"{rev * 100:.0f}% of the portfolio has revenue tied to it"] if rev else []) + \
-                    ([f"{cost * 100:.0f}% has costs tied to it"] if cost else [])
+            if real:
+                parts = ([f"{rev * 100:.0f}% of the portfolio has revenue tied to it"] if rev else []) + \
+                        ([f"{cost * 100:.0f}% has costs tied to it"] if cost else [])
+            else:  # equal weights: a share of the book would be a fiction, so count names instead
+                r_n, c_n = round(rev * n), round(cost * n)
+                parts = ([f"{r_n} of your {n} names {'have' if r_n != 1 else 'has'} revenue tied to it"] if r_n else []) + \
+                        ([f"{c_n} {'have' if c_n != 1 else 'has'} costs tied to it"] if c_n else [])
             lines.append(f"{esc(label)}: {'; '.join(parts)}.")
 
     due = results_this_week({r["ticker"] for r in held})
@@ -1129,8 +1156,13 @@ def main(argv):
     if "--exposures" in argv:
         return exposure_words(argv[argv.index("--exposures") + 1])
 
-    if not dry_run and not all(os.environ.get(k, "").strip() for k in ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "SEC_EMAIL")):
-        print("Not set up yet: add the TELEGRAM_TOKEN, TELEGRAM_CHAT_ID and SEC_EMAIL secrets (README, step 4). Nothing was checked.")
+    missing = [k for k in ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "SEC_EMAIL") if not os.environ.get(k, "").strip()]
+    if not dry_run and missing:
+        note = (f"Not set up yet: add the {', '.join(missing)} secret{'s' if len(missing) > 1 else ''} "
+                f"(README, step 4). Nothing was checked.")
+        print(note)
+        if os.environ.get("GITHUB_ACTIONS"):  # shown in yellow on the run's own page, so nobody has to open the log
+            print(f"::warning title=Not set up yet::{note}")
         return
     first_run = not os.path.exists(STATE)
     rows, source = portfolio(read_watchlist())
@@ -1152,9 +1184,17 @@ def main(argv):
         return telegram(portfolio_map(rows), dry_run)
 
     if first_run:
-        telegram(f"👋 <b>Your portfolio watcher is running.</b>\n\nIt is watching {len(rows)} "
-                 f"name{'s' if len(rows) != 1 else ''}" + (f" ({source})" if source else "") + ". It checks before the market opens and after it "
-                 f"closes, and it only writes when something matters.", dry_run)
+        hello = [f"👋 <b>Your portfolio watcher is running.</b>", "",
+                 f"It is watching {len(rows)} name{'s' if len(rows) != 1 else ''}" + (f" ({source})" if source else "")
+                 + ". It checks before the market opens and after it closes, and it only writes when something matters."]
+        if not any((r.get("shares") or "").strip() or r.get("value") for r in rows):
+            hello += ["", "stocks.txt has no share counts yet, so the Monday check will count every name as "
+                          "the same size. Put the shares after each ticker (UBER 120) and it weights your book."]
+        unknown = [r["ticker"] for r in rows if r["ticker"] not in companies()]
+        if unknown:
+            hello += ["", f"Not filed with the SEC, so no results or filings check, only prices and headlines: "
+                          f"{esc(', '.join(unknown))}."]
+        telegram("\n".join(hello), dry_run)
         telegram(portfolio_map(rows), dry_run)
 
     # results are the most important thing, so each one gets its own message
