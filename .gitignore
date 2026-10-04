@@ -1,4 +1,7 @@
 scratch/
 .env
+settings.txt
+last-run.log
+scratch-state.json
 __pycache__/
 .DS_Store

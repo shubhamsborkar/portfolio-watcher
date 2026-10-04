@@ -60,6 +60,29 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def read_settings_file():
+    """On your own computer the settings can sit in settings.txt next to this file (one KEY=value
+    per line; see settings.example.txt). GitHub secrets, or variables already set, win over it."""
+    for name in ("settings.txt", ".env"):
+        path = os.path.join(HERE, name)
+        if not os.path.exists(path):
+            continue
+        for line in open(path, encoding="utf-8-sig"):
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key, value = key.strip().upper(), value.strip().strip('"').strip("'")
+            if key and value and not os.environ.get(key):
+                os.environ[key] = value
+        break
+
+
+read_settings_file()
+if hasattr(sys.stdout, "reconfigure"):  # Windows consoles default to an encoding that cannot print the emoji
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 STOCKS = os.environ.get("STOCKS") or os.path.join(HERE, "stocks.txt")
 WATCHLIST = os.environ.get("WATCHLIST") or os.path.join(HERE, "watchlist.csv")
 STATE = os.environ.get("STATE") or os.path.join(HERE, "state.json")
@@ -189,11 +212,16 @@ def _yahoo(symbol, rng):
 
 def fred(series):
     """[(date, value)] from FRED. FRED stalls Python's own web requests but serves curl."""
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
     try:
-        r = subprocess.run(["curl", "-s", "-m", "25", f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"],
-                           capture_output=True, text=True, timeout=30)
+        try:
+            r = subprocess.run(["curl", "-s", "-m", "25", url], capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", timeout=30)
+            text = r.stdout
+        except FileNotFoundError:  # no curl on this computer: ask in plain Python instead
+            text = fetch(url)
         out = []
-        for line in r.stdout.strip().splitlines()[1:]:
+        for line in text.strip().splitlines()[1:]:
             d, _, v = line.partition(",")
             if v.strip() not in ("", "."):
                 out.append((d, float(v)))
@@ -210,13 +238,13 @@ def read_watchlist():
     adds columns for any name (your results line, exposures, headline words)."""
     extra = {}
     if os.path.exists(WATCHLIST):
-        with open(WATCHLIST, newline="") as fh:
+        with open(WATCHLIST, newline="", encoding="utf-8-sig") as fh:
             for r in csv.DictReader(fh):
                 if (r.get("ticker") or "").strip():
                     extra[r["ticker"].strip().upper()] = r
     rows = []
     if os.path.exists(STOCKS):
-        for line in open(STOCKS):
+        for line in open(STOCKS, encoding="utf-8-sig"):
             parts = line.split("#")[0].replace(",", " ").split()
             if not parts:
                 continue
@@ -317,7 +345,7 @@ def portfolio(rows):
 
 def load_state():
     try:
-        with open(STATE) as fh:
+        with open(STATE, encoding="utf-8") as fh:
             s = json.load(fh)
     except (OSError, ValueError):
         s = {}
@@ -334,7 +362,7 @@ def save_state(s):
     s = {k: v for k, v in s.items() if k != "today"}
     s["filings"] = s["filings"][-3000:]
     s["headlines"] = s["headlines"][-1000:]
-    with open(STATE, "w") as fh:
+    with open(STATE, "w", encoding="utf-8") as fh:
         json.dump(s, fh, indent=0)
 
 
@@ -753,7 +781,7 @@ NON_US_SUFFIXES = {"NS", "BO", "L", "IL", "TO", "V", "CN", "NE", "HK", "AX", "NZ
 # ----------------------------------------------------------------------------- 3. what the portfolio depends on
 
 def load_commodities():
-    with open(COMMODITIES) as fh:
+    with open(COMMODITIES, encoding="utf-8") as fh:
         return {c["id"]: c for c in json.load(fh)["commodities"]}
 
 
@@ -934,7 +962,7 @@ def theme_headlines(state):
     if not os.path.exists(THEMES):
         return []
     out = []
-    for theme in [t.strip() for t in open(THEMES) if t.strip() and not t.startswith("#")][:5]:
+    for theme in [t.strip() for t in open(THEMES, encoding="utf-8-sig") if t.strip() and not t.startswith("#")][:5]:
         for headline, source, url in google_news(f'"{theme}"'):
             if (any(t.lower() in source.lower() for t in TRUSTED_SOURCES)
                     and f"{headline} - {source}" not in state["headlines"]):
@@ -1160,8 +1188,9 @@ def main(argv):
 
     missing = [k for k in ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "SEC_EMAIL") if not os.environ.get(k, "").strip()]
     if not dry_run and missing:
-        note = (f"Not set up yet: add the {', '.join(missing)} secret{'s' if len(missing) > 1 else ''} "
-                f"(README, step 4). Nothing was checked.")
+        where = ("secret" + ("s" if len(missing) > 1 else "") + " (README, step 4)" if os.environ.get("GITHUB_ACTIONS")
+                 else "line" + ("s" if len(missing) > 1 else "") + " in settings.txt (copy settings.example.txt)")
+        note = f"Not set up yet: fill in the {', '.join(missing)} {where}. Nothing was checked."
         print(note)
         if os.environ.get("GITHUB_ACTIONS"):  # shown in yellow on the run's own page, so nobody has to open the log
             print(f"::warning title=Not set up yet::{note}")

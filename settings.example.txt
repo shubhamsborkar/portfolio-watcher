@@ -1,0 +1,18 @@
+# Only for running the watcher on your own computer. On GitHub the settings are the repository
+# secrets instead, and this file is not needed.
+#
+# Copy this file, name the copy settings.txt, and fill in the three lines. settings.txt is
+# ignored by git, so it never leaves your computer.
+
+TELEGRAM_TOKEN=
+TELEGRAM_CHAT_ID=
+SEC_EMAIL=
+
+# Optional: read your holdings from your broker instead of stocks.txt (README, "Connect your broker").
+# BROKER=alpaca
+# ALPACA_KEY=
+# ALPACA_SECRET=
+# ALPACA_PAPER=on
+
+# Optional: a cheap model for your own results line when the code cannot find it.
+# OPENROUTER_API_KEY=
