@@ -78,19 +78,19 @@ The list in `watchlist.csv` works with any broker, but you have to update it eve
 
 The watcher only reads. Nothing in it places an order. The broker files come from GreekSoup, the open-source one-person equity research desk.
 
-**How to connect it:** add one more secret named `BROKER` with your broker's name from the table, then add the secrets that broker needs, the same way you added the Telegram ones. The keys come from your broker's own website; the link in the table goes to its instructions.
+**How to connect it:** add one more secret named `BROKER` with your broker's name from the table, then add the secrets that broker needs, the same way you added the Telegram ones. The keys come from your broker's own website. Each broker's name in the table links to a step-by-step page on the GreekSoup docs that shows where to find them, because GreekSoup connects to brokers the same way: [https://greeksoup.ai/docs/brokers/](https://greeksoup.ai/docs/brokers/).
 
 | Broker | Where | `BROKER` | Secrets to add |
 |---|---|---|---|
-| [Alpaca](https://docs.alpaca.markets/) | United States | `alpaca` | `ALPACA_KEY`, `ALPACA_SECRET`, and `ALPACA_PAPER` set to `on` for a paper account |
-| [Interactive Brokers](https://www.interactivebrokers.com/campus/ibkr-api-page/flex-web-service/) | worldwide | `ibkr_flex` | `IBKR_FLEX_TOKEN`, `IBKR_FLEX_QUERY` (a Flex Query of your positions, made once in Client Portal) |
-| [Tradier](https://docs.tradier.com/) | United States | `tradier` | `TRADIER_TOKEN`, optional `TRADIER_ACCOUNT` |
-| [tastytrade](https://developer.tastytrade.com/) | United States | `tastytrade` | `TASTY_CLIENT_SECRET`, `TASTY_REFRESH_TOKEN`, optional `TASTY_ACCOUNT` |
-| [Trading 212](https://docs.trading212.com/api) | United Kingdom, Europe | `trading212` | `T212_KEY`, `T212_SECRET` |
-| [Longbridge](https://open.longbridge.com/docs) | Hong Kong, Singapore | `longbridge` | `LONGBRIDGE_APP_KEY`, `LONGBRIDGE_APP_SECRET`, `LONGBRIDGE_ACCESS_TOKEN` (renew it every ninety days) |
-| [Dhan](https://dhanhq.co/docs/v2/) | India | `dhan` | `DHAN_CLIENT_ID`, and either `DHAN_ACCESS_TOKEN` or `DHAN_PIN` with `DHAN_TOTP_SECRET` |
-| [Angel One](https://smartapi.angelone.in/docs) | India | `angel_one` | `ANGEL_API_KEY`, `ANGEL_CLIENT_CODE`, `ANGEL_PIN`, `ANGEL_TOTP_SECRET` |
-| [Groww](https://groww.in/trade-api/docs) | India | `groww` | `GROWW_API_KEY`, and `GROWW_API_SECRET` or `GROWW_TOTP_SECRET` |
+| [Alpaca](https://greeksoup.ai/docs/brokers/alpaca/) | United States | `alpaca` | `ALPACA_KEY`, `ALPACA_SECRET`, and `ALPACA_PAPER` set to `on` for a paper account |
+| [Interactive Brokers](https://greeksoup.ai/docs/brokers/interactive-brokers/) | worldwide | `ibkr_flex` | `IBKR_FLEX_TOKEN`, `IBKR_FLEX_QUERY` (a Flex Query of your positions, made once in Client Portal) |
+| [Tradier](https://greeksoup.ai/docs/brokers/tradier/) | United States | `tradier` | `TRADIER_TOKEN`, optional `TRADIER_ACCOUNT` |
+| [tastytrade](https://greeksoup.ai/docs/brokers/tastytrade/) | United States | `tastytrade` | `TASTY_CLIENT_SECRET`, `TASTY_REFRESH_TOKEN`, optional `TASTY_ACCOUNT` |
+| [Trading 212](https://greeksoup.ai/docs/brokers/trading-212/) | United Kingdom, Europe | `trading212` | `T212_KEY`, `T212_SECRET` |
+| [Longbridge](https://greeksoup.ai/docs/brokers/longbridge/) | Hong Kong, Singapore | `longbridge` | `LONGBRIDGE_APP_KEY`, `LONGBRIDGE_APP_SECRET`, `LONGBRIDGE_ACCESS_TOKEN` (renew it every ninety days) |
+| [Dhan](https://greeksoup.ai/docs/brokers/dhan/) | India | `dhan` | `DHAN_CLIENT_ID`, and either `DHAN_ACCESS_TOKEN` or `DHAN_PIN` with `DHAN_TOTP_SECRET` |
+| [Angel One](https://greeksoup.ai/docs/brokers/angel-one/) | India | `angel_one` | `ANGEL_API_KEY`, `ANGEL_CLIENT_CODE`, `ANGEL_PIN`, `ANGEL_TOTP_SECRET` |
+| [Groww](https://greeksoup.ai/docs/brokers/groww/) | India | `groww` | `GROWW_API_KEY`, and `GROWW_API_SECRET` or `GROWW_TOTP_SECRET` |
 
 With a broker connected, the watcher watches everything the broker holds, plus anything else in `watchlist.csv`, so the list becomes the place for your notes: your line on the results, the exposures and the headline words for each holding, and the names you watch without owning. A holding that is not on the list is still watched for results, price moves and the morning headlines.
 
@@ -99,7 +99,7 @@ With a broker connected, the watcher watches everything the broker holds, plus a
 - Your broker keys sit in your private copy's secrets, which GitHub encrypts and never shows again, even to you. Most brokers' keys can also trade, so treat them like a password: keep your copy private, and where your broker offers a read-only key, use that.
 - The Indian brokers in the table need your trading PIN and the secret behind your authenticator app, because their rules ask for a fresh login each day and this is how the watcher logs in by itself. If you would rather not store those, keep the list.
 - Brokers that need you to log in by hand every day (Schwab, Robinhood, Saxo, Zerodha, ICICI Direct, Upstox) cannot work on a schedule while you sleep, so for those the list is the way. Brokers with no API for individuals (Fidelity, Vanguard and most app-only brokers) are the same.
-- We tested the connection end to end with an Alpaca paper account. The other brokers use the same files as GreekSoup, where they are in use, but not every one has been run from GitHub's computers yet; if yours fails, the run says why in plain words, and the list still works.
+- The broker files are the same ones GreekSoup uses. If yours fails to connect, the run says why in plain words, and the list still works. GreekSoup's [broker will not connect](https://greeksoup.ai/docs/help/broker-will-not-connect/) page covers the usual causes.
 
 ## Set it for your market
 
