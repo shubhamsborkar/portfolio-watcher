@@ -24,7 +24,7 @@ Each alert fires once a day at most.
 
 Nothing. GitHub runs it every hour for free, the Telegram bot is free, and the SEC, the St. Louis Fed (FRED), Yahoo Finance and Google News are free to read.
 
-A private copy on GitHub gets 2,000 free minutes of running time a month. A list of about twenty names uses about two minutes an hour, which is around 1,500 minutes a month. A shorter list uses less.
+A private copy on GitHub gets 2,000 free minutes of running time a month. Our own test with 23 names took 40 seconds a run, which GitHub counts as one minute, so running every hour uses about 720 of the 2,000.
 
 ## Set it up in the browser, no code
 
