@@ -219,6 +219,7 @@ The answer arrives at the next check, so up to half a day later; the program run
 - Companies listed outside the US and India do not file with the SEC or NSE, so they get the price, exposure and headline checks but no results or filings check. The hello message names them.
 - Some commodities have no exchange contract and so no daily price (uranium, lithium, coking coal and a few others). For those the program reads the benchmark's own weekly or monthly summary and fires only on a move of 10% or more over a month; the map says which items are watched that way. A changed page gives nothing rather than a wrong number.
 - Results and dividend dates come from Nasdaq's pages for US listings and from NSE's event calendar for India; a date Nasdaq has only estimated is marked as expected.
+- GitHub starts a scheduled run when it has room, so a check can arrive minutes late and, on a busy day, hours late or not at all. Nothing is lost: every run looks back three days, so a filing missed by a late run arrives with the next one. Press **Run workflow** when you want a check now.
 - Yahoo Finance's price data is free but unofficial, and it can change without notice.
 - This program sends information. It does not tell you what to buy or sell, and it places no orders.
 
