@@ -41,6 +41,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SEC_EMAIL: ${{ secrets.SEC_EMAIL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TELEGRAM_REPLIES: ${{ secrets.TELEGRAM_REPLIES }}
           # Optional: read your holdings from your broker. BROKER is one of alpaca, angel_one,
           # dhan, groww, ibkr_flex, longbridge, tastytrade, tradier, trading212; the README says
           # which secrets each one needs. Leave BROKER unset to use stocks.txt only.

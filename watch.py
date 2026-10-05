@@ -29,6 +29,7 @@ Settings (GitHub repository secrets, or environment variables on your computer):
   TELEGRAM_CHAT_ID    your chat ID (run: python watch.py --chat-id)
   SEC_EMAIL           your email; the SEC asks every program to say who is calling
   BROKER              optional: read your holdings from your broker (see the README)
+  TELEGRAM_REPLIES    optional: off when another program (Claude Code's Telegram channel) answers the same bot
   OPENROUTER_API_KEY  optional, only for your own results line
   OPENROUTER_MODEL    optional, default openai/gpt-6-luna
 
@@ -1661,7 +1662,8 @@ def main(argv):
     state = load_state()
     if "--broker" in argv:
         return telegram(broker_report(rows), dry_run)
-    if not dry_run and telegram_commands(rows, state, dry_run):  # the list changed: read it again
+    replies_on = (os.environ.get("TELEGRAM_REPLIES") or "on").strip().lower() not in ("off", "0", "no", "false")
+    if not dry_run and replies_on and telegram_commands(rows, state, dry_run):  # the list changed: read it again
         rows, source, broker_problem = portfolio(read_watchlist())
         rows = fill_exposures(rows)
     if broker_problem and first_today(state, "broker_problem"):  # once a day, then the list carries on

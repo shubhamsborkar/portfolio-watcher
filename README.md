@@ -208,7 +208,7 @@ Anything you write to the bot is read at the next check, and only your own chat 
 - `map` sends the map of how your holdings connect; `week` sends the Monday check.
 - `add UBER 120` puts Uber with 120 shares into `stocks.txt`; `add NVDA` adds a name you watch; `remove UBER` takes it out. The change is saved into your copy, so you never need the browser for a trade.
 
-The answer arrives at the next check, so up to half a day later; the program runs twice a day and does not sit waiting for messages. If you also connect Claude Code's Telegram channel to the same bot, Telegram lets only one program read the replies, and the watcher steps aside and says so in its log.
+The answer arrives at the next check, so up to half a day later; the program runs twice a day and does not sit waiting for messages. If you connect Claude Code's Telegram channel to the same bot (below), Telegram lets only one program read the replies, so add a secret `TELEGRAM_REPLIES` set to `off` and the watcher leaves them to Claude; Claude can do all of the above and answer questions besides.
 
 **Ask it questions (optional).** For a real conversation, "what does this filing mean?", Claude Code can be connected to the same bot. Ask Claude to set it up for you: the Telegram channel for Claude Code works while Claude Code is running on your computer, and a routine in Anthropic's cloud can do it with your computer off. Both are research previews at the time of writing, so the steps may change.
 
